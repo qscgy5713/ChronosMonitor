@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -14,12 +15,13 @@ import (
 )
 
 type TaskHandler struct {
-	store *store.TaskStore
-	hub   *broker.Hub
+	store         *store.TaskStore
+	scheduleStore *store.ScheduleStore
+	hub           *broker.Hub
 }
 
-func NewTaskHandler(s *store.TaskStore, hub *broker.Hub) *TaskHandler {
-	return &TaskHandler{store: s, hub: hub}
+func NewTaskHandler(s *store.TaskStore, scheduleStore *store.ScheduleStore, hub *broker.Hub) *TaskHandler {
+	return &TaskHandler{store: s, scheduleStore: scheduleStore, hub: hub}
 }
 
 func (h *TaskHandler) Start(c *gin.Context) {
@@ -51,6 +53,13 @@ func (h *TaskHandler) Start(c *gin.Context) {
 	task.LastHeartbeatAt = &task.StartedAt
 	h.hub.Publish(broker.Event{Type: broker.EventStarted, Task: task})
 
+	// Best-effort: if this task_name has a registered schedule, this start
+	// clears any "missed" state and resets the deadline. A failure here
+	// shouldn't fail the request — the run was already recorded.
+	if err := h.scheduleStore.Touch(req.TaskName, task.StartedAt); err != nil {
+		log.Printf("failed to touch schedule for task_name=%q: %v", req.TaskName, err)
+	}
+
 	c.JSON(http.StatusCreated, gin.H{"run_id": runID})
 }
 
@@ -62,7 +71,7 @@ func (h *TaskHandler) Heartbeat(c *gin.Context) {
 	}
 
 	if err := h.store.Heartbeat(req.RunID, time.Now().UTC()); err != nil {
-		respondStoreErr(c, err)
+		respondStoreErr(c, err, "task run not found")
 		return
 	}
 
@@ -78,7 +87,7 @@ func (h *TaskHandler) Success(c *gin.Context) {
 	}
 
 	if err := h.store.Finish(req.RunID, models.StatusSuccess, "", time.Now().UTC()); err != nil {
-		respondStoreErr(c, err)
+		respondStoreErr(c, err, "task run not found")
 		return
 	}
 
@@ -94,7 +103,7 @@ func (h *TaskHandler) Failed(c *gin.Context) {
 	}
 
 	if err := h.store.Finish(req.RunID, models.StatusFailed, req.ErrorMessage, time.Now().UTC()); err != nil {
-		respondStoreErr(c, err)
+		respondStoreErr(c, err, "task run not found")
 		return
 	}
 
@@ -105,7 +114,7 @@ func (h *TaskHandler) Failed(c *gin.Context) {
 func (h *TaskHandler) Get(c *gin.Context) {
 	task, err := h.store.Get(c.Param("runID"))
 	if err != nil {
-		respondStoreErr(c, err)
+		respondStoreErr(c, err, "task run not found")
 		return
 	}
 	c.JSON(http.StatusOK, task)
@@ -131,9 +140,9 @@ func (h *TaskHandler) publishLatest(runID, eventType string) {
 	h.hub.Publish(broker.Event{Type: eventType, Task: *task})
 }
 
-func respondStoreErr(c *gin.Context, err error) {
+func respondStoreErr(c *gin.Context, err error, notFoundMsg string) {
 	if errors.Is(err, store.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "task run not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": notFoundMsg})
 		return
 	}
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})

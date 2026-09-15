@@ -18,7 +18,7 @@ import (
 // /healthz and the embedded dashboard stay unauthenticated: health checks
 // need to work regardless, and the SPA shell has to load before it can even
 // prompt for a key.
-func New(taskHandler *handlers.TaskHandler, streamHandler *handlers.StreamHandler, assets fs.FS, apiKey string) *gin.Engine {
+func New(taskHandler *handlers.TaskHandler, streamHandler *handlers.StreamHandler, scheduleHandler *handlers.ScheduleHandler, assets fs.FS, apiKey string) *gin.Engine {
 	r := gin.Default()
 
 	r.GET("/healthz", func(c *gin.Context) {
@@ -38,6 +38,10 @@ func New(taskHandler *handlers.TaskHandler, streamHandler *handlers.StreamHandle
 		v1.GET("/tasks/:runID", taskHandler.Get)
 
 		v1.GET("/stream", streamHandler.Stream)
+
+		v1.POST("/schedules", scheduleHandler.Register)
+		v1.GET("/schedules", scheduleHandler.List)
+		v1.DELETE("/schedules/:taskName", scheduleHandler.Delete)
 	}
 
 	r.NoRoute(serveEmbeddedUI(assets))

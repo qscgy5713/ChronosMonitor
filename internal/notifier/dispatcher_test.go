@@ -28,7 +28,7 @@ func (f *fakeNotifier) callCount() int {
 	return len(f.calls)
 }
 
-func TestHandle_OnlyForwardsFailedAndTimeout(t *testing.T) {
+func TestHandle_OnlyForwardsFailedTimeoutAndScheduleMissed(t *testing.T) {
 	fake := &fakeNotifier{}
 	d := NewDispatcher(broker.New(), fake, 0, time.Minute)
 
@@ -38,16 +38,21 @@ func TestHandle_OnlyForwardsFailedAndTimeout(t *testing.T) {
 		broker.EventSucceeded,
 		broker.EventFailed,
 		broker.EventTimeout,
+		broker.EventScheduleMissed,
 	}
 	for _, evtType := range events {
 		d.handle(broker.Event{Type: evtType, Task: models.TaskRun{RunID: evtType}})
 	}
 
-	if fake.callCount() != 2 {
-		t.Fatalf("Notify called %d times, want 2 (failed + timeout only)", fake.callCount())
+	if fake.callCount() != 3 {
+		t.Fatalf("Notify called %d times, want 3 (failed + timeout + schedule.missed only)", fake.callCount())
 	}
-	if fake.calls[0].RunID != broker.EventFailed || fake.calls[1].RunID != broker.EventTimeout {
-		t.Errorf("notified tasks = %+v, want [failed, timeout]", fake.calls)
+	want := []string{broker.EventFailed, broker.EventTimeout, broker.EventScheduleMissed}
+	for i, w := range want {
+		if fake.calls[i].RunID != w {
+			t.Errorf("notified tasks = %+v, want %v", fake.calls, want)
+			break
+		}
 	}
 }
 

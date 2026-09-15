@@ -11,7 +11,7 @@ import (
 	"chronosmonitor/internal/models"
 )
 
-func newTestStore(t *testing.T) *TaskStore {
+func newTestConn(t *testing.T) *db.Conn {
 	t.Helper()
 
 	conn, err := db.Open(config.Config{
@@ -23,7 +23,12 @@ func newTestStore(t *testing.T) *TaskStore {
 	}
 	t.Cleanup(func() { conn.Close() })
 
-	return NewTaskStore(conn)
+	return conn
+}
+
+func newTestStore(t *testing.T) *TaskStore {
+	t.Helper()
+	return NewTaskStore(newTestConn(t))
 }
 
 func int64ptr(v int64) *int64 { return &v }

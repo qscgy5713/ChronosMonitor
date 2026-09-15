@@ -18,7 +18,7 @@ import (
 	"chronosmonitor/internal/store"
 )
 
-func newTestSetup(t *testing.T) (*gin.Engine, *broker.Hub) {
+func newTestSetup(t *testing.T) (*gin.Engine, *broker.Hub, *store.ScheduleStore) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -32,7 +32,9 @@ func newTestSetup(t *testing.T) (*gin.Engine, *broker.Hub) {
 	t.Cleanup(func() { conn.Close() })
 
 	hub := broker.New()
-	h := NewTaskHandler(store.NewTaskStore(conn), hub)
+	scheduleStore := store.NewScheduleStore(conn)
+	h := NewTaskHandler(store.NewTaskStore(conn), scheduleStore, hub)
+	sh := NewScheduleHandler(scheduleStore)
 
 	r := gin.New()
 	r.POST("/start", h.Start)
@@ -41,8 +43,11 @@ func newTestSetup(t *testing.T) (*gin.Engine, *broker.Hub) {
 	r.POST("/failed", h.Failed)
 	r.GET("/tasks", h.List)
 	r.GET("/tasks/:runID", h.Get)
+	r.POST("/schedules", sh.Register)
+	r.GET("/schedules", sh.List)
+	r.DELETE("/schedules/:taskName", sh.Delete)
 
-	return r, hub
+	return r, hub, scheduleStore
 }
 
 func doJSON(t *testing.T, r *gin.Engine, method, path string, body any) *httptest.ResponseRecorder {
@@ -81,7 +86,7 @@ func expectEvent(t *testing.T, ch <-chan broker.Event, wantType string) broker.E
 }
 
 func TestStart_ReturnsRunIDAndPublishesEvent(t *testing.T) {
-	r, hub := newTestSetup(t)
+	r, hub, _ := newTestSetup(t)
 	ch, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
 
@@ -111,7 +116,7 @@ func TestStart_ReturnsRunIDAndPublishesEvent(t *testing.T) {
 }
 
 func TestStart_UsesClientSuppliedRunID(t *testing.T) {
-	r, _ := newTestSetup(t)
+	r, _, _ := newTestSetup(t)
 
 	w := doJSON(t, r, http.MethodPost, "/start", models.StartRequest{
 		TaskName: "custom-id-task",
@@ -131,7 +136,7 @@ func TestStart_UsesClientSuppliedRunID(t *testing.T) {
 }
 
 func TestStart_MissingTaskNameReturns400(t *testing.T) {
-	r, _ := newTestSetup(t)
+	r, _, _ := newTestSetup(t)
 
 	w := doJSON(t, r, http.MethodPost, "/start", map[string]string{"source": "x"})
 	if w.Code != http.StatusBadRequest {
@@ -140,7 +145,7 @@ func TestStart_MissingTaskNameReturns400(t *testing.T) {
 }
 
 func TestHeartbeat_UnknownRunIDReturns404(t *testing.T) {
-	r, _ := newTestSetup(t)
+	r, _, _ := newTestSetup(t)
 
 	w := doJSON(t, r, http.MethodPost, "/heartbeat", models.HeartbeatRequest{RunID: "nope"})
 	if w.Code != http.StatusNotFound {
@@ -149,7 +154,7 @@ func TestHeartbeat_UnknownRunIDReturns404(t *testing.T) {
 }
 
 func TestFullLifecycle_StartHeartbeatSuccess(t *testing.T) {
-	r, hub := newTestSetup(t)
+	r, hub, _ := newTestSetup(t)
 	ch, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
 
@@ -190,7 +195,7 @@ func TestFullLifecycle_StartHeartbeatSuccess(t *testing.T) {
 }
 
 func TestFailed_StoresAndPublishesErrorMessage(t *testing.T) {
-	r, hub := newTestSetup(t)
+	r, hub, _ := newTestSetup(t)
 	ch, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
 
@@ -223,7 +228,7 @@ func TestFailed_StoresAndPublishesErrorMessage(t *testing.T) {
 }
 
 func TestList_FiltersByStatus(t *testing.T) {
-	r, _ := newTestSetup(t)
+	r, _, _ := newTestSetup(t)
 
 	w := doJSON(t, r, http.MethodPost, "/start", models.StartRequest{TaskName: "a"})
 	var a struct {
@@ -241,5 +246,43 @@ func TestList_FiltersByStatus(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	if len(resp.Tasks) != 1 || resp.Tasks[0].TaskName != "a" {
 		t.Fatalf("filtered list = %+v, want only task 'a'", resp.Tasks)
+	}
+}
+
+func TestStart_TouchesRegisteredScheduleAndClearsMissedStatus(t *testing.T) {
+	r, _, scheduleStore := newTestSetup(t)
+
+	if err := scheduleStore.Upsert("daily-report", 60, 0, time.Now().UTC()); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	// Simulate it having already been flagged missed before this run showed up.
+	if _, err := scheduleStore.DetectMissed(time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatalf("DetectMissed() error = %v", err)
+	}
+
+	w := doJSON(t, r, http.MethodPost, "/start", models.StartRequest{TaskName: "daily-report"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusCreated)
+	}
+
+	sched, err := scheduleStore.Get("daily-report")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if sched.Status != models.ScheduleStatusOK {
+		t.Errorf("schedule status = %q, want ok after a fresh start", sched.Status)
+	}
+	if sched.LastSeenAt == nil {
+		t.Error("schedule LastSeenAt is nil, want it set by the start report")
+	}
+}
+
+func TestStart_UnregisteredTaskNameDoesNotFail(t *testing.T) {
+	r, _, _ := newTestSetup(t)
+
+	// "unregistered-task" has no schedule; Start() must still succeed.
+	w := doJSON(t, r, http.MethodPost, "/start", models.StartRequest{TaskName: "unregistered-task"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusCreated)
 	}
 }

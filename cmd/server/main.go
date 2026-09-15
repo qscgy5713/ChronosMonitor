@@ -12,6 +12,7 @@ import (
 	"chronosmonitor/internal/config"
 	"chronosmonitor/internal/db"
 	"chronosmonitor/internal/handlers"
+	"chronosmonitor/internal/missedrun"
 	"chronosmonitor/internal/notifier"
 	"chronosmonitor/internal/retention"
 	"chronosmonitor/internal/router"
@@ -30,10 +31,12 @@ func main() {
 	defer conn.Close()
 
 	taskStore := store.NewTaskStore(conn)
+	scheduleStore := store.NewScheduleStore(conn)
 	hub := broker.New()
-	taskHandler := handlers.NewTaskHandler(taskStore, hub)
+	taskHandler := handlers.NewTaskHandler(taskStore, scheduleStore, hub)
 	streamHandler := handlers.NewStreamHandler(hub)
-	r := router.New(taskHandler, streamHandler, webui.Assets(), cfg.APIKey)
+	scheduleHandler := handlers.NewScheduleHandler(scheduleStore)
+	r := router.New(taskHandler, streamHandler, scheduleHandler, webui.Assets(), cfg.APIKey)
 	if cfg.APIKey != "" {
 		log.Println("API authentication enabled")
 	} else {
@@ -50,6 +53,9 @@ func main() {
 
 	ttlSweeper := sweeper.New(taskStore, hub, cfg.TTLSweepInterval)
 	go ttlSweeper.Run(ctx)
+
+	missedRunDetector := missedrun.New(scheduleStore, hub, cfg.MissedRunCheckInterval)
+	go missedRunDetector.Run(ctx)
 
 	if cfg.AlertWebhookURL != "" {
 		n := notifier.NewWebhookNotifier(cfg.AlertWebhookURL, notifier.Format(cfg.AlertWebhookFormat))

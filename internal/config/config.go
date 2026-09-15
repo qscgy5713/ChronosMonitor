@@ -42,6 +42,12 @@ type Config struct {
 	// RetentionSweepInterval controls how often the retention job checks for
 	// data to delete.
 	RetentionSweepInterval time.Duration
+
+	// MissedRunCheckInterval controls how often registered schedules are
+	// checked for overdue tasks. There's no on/off flag for this one — it's
+	// always running, since a schedule only ever affects anything once a
+	// task_name is explicitly registered via the schedules API.
+	MissedRunCheckInterval time.Duration
 }
 
 func Load() Config {
@@ -57,6 +63,7 @@ func Load() Config {
 		APIKey:                  getEnv("CHRONOS_API_KEY", ""),
 		RetentionDays:           getEnvInt("CHRONOS_RETENTION_DAYS", 0),
 		RetentionSweepInterval:  getEnvSeconds("CHRONOS_RETENTION_SWEEP_INTERVAL_SECONDS", 3600) * time.Second,
+		MissedRunCheckInterval:  getEnvSeconds("CHRONOS_MISSED_RUN_CHECK_INTERVAL_SECONDS", 60) * time.Second,
 	}
 }
 

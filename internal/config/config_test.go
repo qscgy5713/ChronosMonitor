@@ -38,6 +38,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RetentionSweepInterval != time.Hour {
 		t.Errorf("RetentionSweepInterval = %v, want 1h", cfg.RetentionSweepInterval)
 	}
+	if cfg.MissedRunCheckInterval != time.Minute {
+		t.Errorf("MissedRunCheckInterval = %v, want 1m", cfg.MissedRunCheckInterval)
+	}
 }
 
 func TestLoadReadsEnvOverrides(t *testing.T) {
@@ -51,6 +54,7 @@ func TestLoadReadsEnvOverrides(t *testing.T) {
 	t.Setenv("CHRONOS_API_KEY", "secret-key")
 	t.Setenv("CHRONOS_RETENTION_DAYS", "90")
 	t.Setenv("CHRONOS_RETENTION_SWEEP_INTERVAL_SECONDS", "60")
+	t.Setenv("CHRONOS_MISSED_RUN_CHECK_INTERVAL_SECONDS", "15")
 
 	cfg := Load()
 
@@ -83,5 +87,8 @@ func TestLoadReadsEnvOverrides(t *testing.T) {
 	}
 	if cfg.RetentionSweepInterval != 60*time.Second {
 		t.Errorf("RetentionSweepInterval = %v, want 60s", cfg.RetentionSweepInterval)
+	}
+	if cfg.MissedRunCheckInterval != 15*time.Second {
+		t.Errorf("MissedRunCheckInterval = %v, want 15s", cfg.MissedRunCheckInterval)
 	}
 }

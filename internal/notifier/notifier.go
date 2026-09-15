@@ -80,10 +80,15 @@ func formatMessage(task models.TaskRun) string {
 		icon, verb = "🔴", "failed"
 	case models.StatusTimeout:
 		icon, verb = "⏰", "timed out"
+	case models.StatusMissed:
+		icon, verb = "👻", "missed its expected run"
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s *%s* %s (run `%s`)", icon, task.TaskName, verb, task.RunID)
+	fmt.Fprintf(&b, "%s *%s* %s", icon, task.TaskName, verb)
+	if task.RunID != "" {
+		fmt.Fprintf(&b, " (run `%s`)", task.RunID)
+	}
 	if task.Source != "" {
 		fmt.Fprintf(&b, " from `%s`", task.Source)
 	}

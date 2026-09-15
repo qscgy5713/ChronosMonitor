@@ -12,6 +12,10 @@ const (
 	EventSucceeded = "task.succeeded"
 	EventFailed    = "task.failed"
 	EventTimeout   = "task.timeout"
+	// EventScheduleMissed fires when a registered schedule goes overdue — see
+	// internal/missedrun. Its Event.Task is a synthetic record (no run_id),
+	// not a real task_runs row.
+	EventScheduleMissed = "schedule.missed"
 )
 
 type Event struct {

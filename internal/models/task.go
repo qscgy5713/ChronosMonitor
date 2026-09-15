@@ -9,6 +9,13 @@ const (
 	StatusSuccess TaskStatus = "success"
 	StatusFailed  TaskStatus = "failed"
 	StatusTimeout TaskStatus = "timeout"
+
+	// StatusMissed is never stored in task_runs — a missed run is, by
+	// definition, one that never started, so there's no row for it. It's
+	// used only to build a synthetic TaskRun for the alert notifier, so a
+	// missed-schedule alert can travel through the same webhook pipeline as
+	// real failed/timeout alerts without duplicating that code.
+	StatusMissed TaskStatus = "missed"
 )
 
 type TaskRun struct {

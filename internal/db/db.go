@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_name ON task_runs(task_name);
 CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
+
+CREATE TABLE IF NOT EXISTS task_schedules (
+	task_name                  TEXT PRIMARY KEY,
+	expected_interval_seconds  INTEGER NOT NULL,
+	grace_period_seconds       INTEGER NOT NULL DEFAULT 0,
+	last_seen_at               DATETIME,
+	status                     TEXT NOT NULL DEFAULT 'ok',
+	updated_at                 DATETIME NOT NULL
+);
 `
 
 const postgresSchema = `
@@ -46,6 +55,15 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_name ON task_runs(task_name);
 CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
+
+CREATE TABLE IF NOT EXISTS task_schedules (
+	task_name                  TEXT PRIMARY KEY,
+	expected_interval_seconds  BIGINT NOT NULL,
+	grace_period_seconds       BIGINT NOT NULL DEFAULT 0,
+	last_seen_at               TIMESTAMPTZ,
+	status                     TEXT NOT NULL DEFAULT 'ok',
+	updated_at                 TIMESTAMPTZ NOT NULL
+);
 `
 
 // Conn wraps *sql.DB and rewrites the "?" placeholders used throughout

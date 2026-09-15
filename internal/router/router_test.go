@@ -36,10 +36,12 @@ func newTestRouterWithAPIKey(t *testing.T, assets fstest.MapFS, apiKey string) *
 	t.Cleanup(func() { conn.Close() })
 
 	hub := broker.New()
-	taskHandler := handlers.NewTaskHandler(store.NewTaskStore(conn), hub)
+	scheduleStore := store.NewScheduleStore(conn)
+	taskHandler := handlers.NewTaskHandler(store.NewTaskStore(conn), scheduleStore, hub)
 	streamHandler := handlers.NewStreamHandler(hub)
+	scheduleHandler := handlers.NewScheduleHandler(scheduleStore)
 
-	return New(taskHandler, streamHandler, assets, apiKey)
+	return New(taskHandler, streamHandler, scheduleHandler, assets, apiKey)
 }
 
 func fakeAssets() fstest.MapFS {
@@ -187,5 +189,22 @@ func TestHealthzAndDashboardStayOpenWhenAPIKeyConfigured(t *testing.T) {
 	w = get(t, r, "/")
 	if w.Code != http.StatusOK {
 		t.Errorf("/ status = %d, want %d (dashboard shell must load before it can prompt for a key)", w.Code, http.StatusOK)
+	}
+}
+
+func TestScheduleRoutesAreProtectedByAPIKeyLikeEverythingElse(t *testing.T) {
+	r := newTestRouterWithAPIKey(t, fakeAssets(), "correct-key")
+
+	w := get(t, r, "/api/v1/schedules")
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("/api/v1/schedules without key: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil)
+	req.Header.Set("Authorization", "Bearer correct-key")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("/api/v1/schedules with key: status = %d, want %d", w.Code, http.StatusOK)
 	}
 }

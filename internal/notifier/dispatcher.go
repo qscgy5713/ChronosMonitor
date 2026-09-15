@@ -10,9 +10,10 @@ import (
 )
 
 // Dispatcher subscribes to task lifecycle events and forwards the
-// alert-worthy ones (failed, timeout) to a Notifier. It applies a simple
-// rolling-window rate limit so a burst of simultaneous failures (e.g. a
-// shared dependency going down) can't flood the notification channel.
+// alert-worthy ones (failed, timeout, schedule-missed) to a Notifier. It
+// applies a simple rolling-window rate limit so a burst of simultaneous
+// failures (e.g. a shared dependency going down) can't flood the
+// notification channel.
 type Dispatcher struct {
 	hub      *broker.Hub
 	notifier Notifier
@@ -54,7 +55,9 @@ func (d *Dispatcher) Run(ctx context.Context) {
 }
 
 func (d *Dispatcher) handle(evt broker.Event) {
-	if evt.Type != broker.EventFailed && evt.Type != broker.EventTimeout {
+	switch evt.Type {
+	case broker.EventFailed, broker.EventTimeout, broker.EventScheduleMissed:
+	default:
 		return
 	}
 

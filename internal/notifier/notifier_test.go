@@ -102,6 +102,25 @@ func TestFormatMessage_TimeoutUsesDifferentWording(t *testing.T) {
 	}
 }
 
+func TestFormatMessage_MissedScheduleHasNoRunIDAndDifferentWording(t *testing.T) {
+	task := models.TaskRun{
+		TaskName:     "invoice-sync",
+		Status:       models.StatusMissed,
+		ErrorMessage: "expected at least once every 3600s (+0s grace); last seen: never",
+	}
+
+	msg := formatMessage(task)
+	if !strings.Contains(msg, "missed its expected run") {
+		t.Errorf("message = %q, want it to mention a missed run", msg)
+	}
+	if strings.Contains(msg, "run ``") || strings.Contains(msg, "(run `)") {
+		t.Errorf("message = %q, should not print an empty run id for a synthetic missed-run alert", msg)
+	}
+	if !strings.Contains(msg, "expected at least once every 3600s") {
+		t.Errorf("message = %q, want the schedule detail in the error_message body", msg)
+	}
+}
+
 func TestNotify_SendsToWebhookAndSucceedsOn2xx(t *testing.T) {
 	var received []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

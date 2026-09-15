@@ -35,6 +35,7 @@ graph TD
 - **HTTP 狀態回報 API**：`start` / `heartbeat` / `success` / `failed`
 - **即時監控儀表板**：Vue 3 + SSE，狀態變化立即反映，不用重新整理
 - **任務逾期警告（TTL）**：任務超過宣告的時間沒有心跳/完成，自動標記為 `timeout`
+- **Missed run 偵測（dead man's switch）**：可以額外註冊「這個任務應該至少每 N 秒跑一次」，完全沒 `start` 也能被抓到並觸發告警——這是 TTL 機制的對稱功能，TTL 抓「跑了但卡住」，這個抓「該跑但根本沒跑」
 - **錯誤堆疊追蹤**：失敗任務可夾帶 `error_message`（含 stack trace），直接在面板上看
 - **告警通知**：任務失敗/逾時可透過 webhook 通知 Slack / Discord，內建頻率限制避免洗版
 - **API 認證**：可選的 API key，保護回報端點不被亂打（尤其是接了告警之後，沒認證等於誰都能發假失敗事件洗你的 Slack）
@@ -61,11 +62,12 @@ cmd/
 internal/
   config/          環境變數設定
   db/              資料庫連線，SQLite/Postgres 切換與 SQL placeholder 轉換
-  models/          TaskRun 資料模型
-  store/           task_runs 資料存取層（含 TTL 掃描邏輯）
+  models/          TaskRun / Schedule 資料模型
+  store/           task_runs、task_schedules 資料存取層（含 TTL 掃描、missed-run 偵測邏輯）
   broker/          記憶體內 pub/sub，供 SSE 推播與告警訂閱用
-  sweeper/         背景 goroutine，定期掃描逾期任務
-  notifier/        失敗/逾時告警：webhook 訊息格式化 + 頻率限制 dispatcher
+  sweeper/         背景 goroutine，定期掃描逾期（TTL）任務
+  missedrun/       背景 goroutine，定期檢查有沒有該跑但沒跑的排程
+  notifier/        失敗/逾時/missed run 告警：webhook 訊息格式化 + 頻率限制 dispatcher
   retention/       背景 goroutine，定期刪除超過保留期限的已結束任務
   handlers/        Gin handler（HTTP API + SSE stream）
   router/          路由註冊、內嵌前端靜態檔案伺服
@@ -167,12 +169,37 @@ CHRONOS_BASE_URL=http://your-host:8080 go run ./cmd/demo-worker
 | `CHRONOS_DB_PATH` | `data/chronos.db` | SQLite 檔案路徑（`CHRONOS_DB_DRIVER=sqlite` 時使用） |
 | `CHRONOS_DB_DSN` | (空) | PostgreSQL 連線字串，例：`postgres://user:pass@host:5432/db?sslmode=disable`（`CHRONOS_DB_DRIVER=postgres` 時必填） |
 | `CHRONOS_TTL_SWEEP_INTERVAL_SECONDS` | `30` | TTL 逾期掃描的間隔秒數 |
-| `CHRONOS_ALERT_WEBHOOK_URL` | (空) | 設定後啟用告警；任務 `failed` / `timeout` 時會 POST 到這個 URL。不設定就完全不啟用（預設） |
+| `CHRONOS_MISSED_RUN_CHECK_INTERVAL_SECONDS` | `60` | Missed-run 檢查的間隔秒數。沒有開關可以關閉——只有真的用 API 註冊過排程的任務才會被檢查，沒註冊的完全不受影響 |
+| `CHRONOS_ALERT_WEBHOOK_URL` | (空) | 設定後啟用告警；任務 `failed` / `timeout` / missed schedule 時會 POST 到這個 URL。不設定就完全不啟用（預設） |
 | `CHRONOS_ALERT_WEBHOOK_FORMAT` | `slack` | `slack`（`{"text":...}`，Mattermost 等 Slack-compatible 服務也吃這個格式）/ `discord`（`{"content":...}`）/ `generic`（原始任務 JSON，接自己的系統用） |
 | `CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE` | `10` | 每分鐘最多送出幾則告警，超過的直接丟棄並記 log，避免大量任務同時失敗時洗版。設 `0` 表示不限制 |
 | `CHRONOS_API_KEY` | (空) | 設定後，整個 `/api/v1/*`（含回報跟查詢）都需要帶這把 key 才能存取。不設定就完全不需要認證（預設，向下相容） |
 | `CHRONOS_RETENTION_DAYS` | `0` | 已結束任務的保留天數，超過就會被自動刪除。`0` 表示永久保留（預設） |
 | `CHRONOS_RETENTION_SWEEP_INTERVAL_SECONDS` | `3600` | 清理工作的檢查間隔秒數（預設 1 小時） |
+
+## Missed Run 偵測（Dead Man's Switch）
+
+TTL 逾期偵測只能抓「任務已經 `start` 但卡住不放」；如果一個 cron 該跑的時候完全沒跑（程式沒被觸發、被排程系統漏掉、主機掛了...），TTL 機制完全不會知道，因為根本沒有一筆 run 存在。Missed run 偵測補上這一塊：額外註冊一個「這個 `task_name` 應該至少每 N 秒回報一次」的期望，背景服務會定期檢查有沒有超過期限沒收到 `start`。
+
+註冊排程：
+
+```bash
+curl -X POST localhost:8080/api/v1/schedules \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "task_name": "daily-report",
+    "expected_interval_seconds": 86400,
+    "grace_period_seconds": 1800
+  }'
+```
+
+意思是「`daily-report` 應該至少每 86400 秒（24 小時）回報一次 `start`，超過再加 1800 秒（30 分鐘緩衝）都沒收到才算 missed」。之後只要這個 `task_name` 正常呼叫 `POST /api/v1/events/start`，排程就會自動被「摸」一下（reset 計時、狀態轉回 `ok`）——不需要額外呼叫任何 API，跟平常回報流程完全一樣。
+
+一旦超過期限沒收到，狀態會轉成 `missed` 並觸發一次告警（跟 `failed`/`timeout` 走同一條 webhook 管線）；之後在下次真的收到 `start`之前，不會重複告警轟炸。
+
+查詢目前所有排程狀態：`GET /api/v1/schedules`；取消追蹤：`DELETE /api/v1/schedules/:taskName`。
+
+這個功能**完全是 opt-in**——沒有註冊過排程的 `task_name` 不受任何影響，跟現有行為完全相容。
 
 ## 資料保留
 
@@ -331,8 +358,28 @@ SSE endpoint，前端用 `new EventSource('/api/v1/stream')` 訂閱。事件類�
 | `task.succeeded` | 任務成功 |
 | `task.failed` | 任務失敗 |
 | `task.timeout` | TTL 逾期被判定為 timeout |
+| `schedule.missed` | 註冊過的排程逾期沒收到 `start` |
 
-每個事件的 `data` 都是完整的任務物件（JSON）。
+每個事件的 `data` 都是完整的任務物件（JSON）；`schedule.missed` 因為沒有真正的 run，`run_id` 會是空字串，詳情放在 `error_message`。
+
+### `POST /api/v1/schedules`
+
+註冊或更新一個 missed-run 排程期望。`task_name` 沒有對應的真實任務也可以先註冊（例如任務還沒部署，先設好告警）。
+
+```json
+// request
+{ "task_name": "daily-report", "expected_interval_seconds": 86400, "grace_period_seconds": 1800 }
+
+// response 204 No Content
+```
+
+### `GET /api/v1/schedules`
+
+列出所有註冊的排程與目前狀態（`ok` / `missed`）、`last_seen_at`。
+
+### `DELETE /api/v1/schedules/:taskName`
+
+取消追蹤這個 `task_name` 的排程期望。
 
 ### `GET /healthz`
 
