@@ -36,6 +36,7 @@ graph TD
 - **即時監控儀表板**：Vue 3 + SSE，狀態變化立即反映，不用重新整理
 - **任務逾期警告（TTL）**：任務超過宣告的時間沒有心跳/完成，自動標記為 `timeout`
 - **錯誤堆疊追蹤**：失敗任務可夾帶 `error_message`（含 stack trace），直接在面板上看
+- **告警通知**：任務失敗/逾時可透過 webhook 通知 Slack / Discord，內建頻率限制避免洗版
 - **SQLite / PostgreSQL 雙資料庫支援**：預設零依賴 SQLite，設定環境變數即可切換 PostgreSQL
 - **單一執行檔部署**：前端建置產物透過 `go:embed` 打包進二進位檔
 
@@ -59,8 +60,9 @@ internal/
   db/              資料庫連線，SQLite/Postgres 切換與 SQL placeholder 轉換
   models/          TaskRun 資料模型
   store/           task_runs 資料存取層（含 TTL 掃描邏輯）
-  broker/          記憶體內 pub/sub，供 SSE 推播用
+  broker/          記憶體內 pub/sub，供 SSE 推播與告警訂閱用
   sweeper/         背景 goroutine，定期掃描逾期任務
+  notifier/        失敗/逾時告警：webhook 訊息格式化 + 頻率限制 dispatcher
   handlers/        Gin handler（HTTP API + SSE stream）
   router/          路由註冊、內嵌前端靜態檔案伺服
   webui/           go:embed 內嵌前端 build 產物
@@ -130,6 +132,47 @@ CHRONOS_BASE_URL=http://your-host:8080 go run ./cmd/demo-worker
 | `CHRONOS_DB_PATH` | `data/chronos.db` | SQLite 檔案路徑（`CHRONOS_DB_DRIVER=sqlite` 時使用） |
 | `CHRONOS_DB_DSN` | (空) | PostgreSQL 連線字串，例：`postgres://user:pass@host:5432/db?sslmode=disable`（`CHRONOS_DB_DRIVER=postgres` 時必填） |
 | `CHRONOS_TTL_SWEEP_INTERVAL_SECONDS` | `30` | TTL 逾期掃描的間隔秒數 |
+| `CHRONOS_ALERT_WEBHOOK_URL` | (空) | 設定後啟用告警；任務 `failed` / `timeout` 時會 POST 到這個 URL。不設定就完全不啟用（預設） |
+| `CHRONOS_ALERT_WEBHOOK_FORMAT` | `slack` | `slack`（`{"text":...}`，Mattermost 等 Slack-compatible 服務也吃這個格式）/ `discord`（`{"content":...}`）/ `generic`（原始任務 JSON，接自己的系統用） |
+| `CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE` | `10` | 每分鐘最多送出幾則告警，超過的直接丟棄並記 log，避免大量任務同時失敗時洗版。設 `0` 表示不限制 |
+
+## 告警通知
+
+`CHRONOS_ALERT_WEBHOOK_URL` 有設定值才會啟用，只有 `task.failed` 和 `task.timeout` 兩種事件會觸發告警（成功/心跳/開始不會）。
+
+### Slack
+
+在 Slack 建一個 [Incoming Webhook](https://api.slack.com/messaging/webhooks)，拿到 URL 後：
+
+```bash
+CHRONOS_ALERT_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz \
+CHRONOS_ALERT_WEBHOOK_FORMAT=slack \
+./chronosmonitor
+```
+
+### Discord
+
+伺服器設定 → 整合 → Webhook，複製 Webhook URL：
+
+```bash
+CHRONOS_ALERT_WEBHOOK_URL=https://discord.com/api/webhooks/xxx/yyy \
+CHRONOS_ALERT_WEBHOOK_FORMAT=discord \
+./chronosmonitor
+```
+
+### 訊息範例
+
+```
+🔴 *invoice-sync* failed (run `a1b2c3d4-...`) from `laravel-cron`
+Duration: 132ms
+```connection refused to db:5432```
+```
+
+逾時任務會用 ⏰ + `timed out` 字樣。錯誤訊息超過 500 字元會被截斷，避免一則 stack trace 洗掉整個頻道。
+
+### 頻率限制
+
+同一分鐘視窗內超過 `CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE` 則的告警會被丟棄（不送 webhook），只在伺服器 log 留一行 `alert suppressed (rate limit): ...`，等下一個視窗重新計算。這是為了避免像「共用的資料庫掛掉，二十個 cron 同時失敗」這種情境把 Slack 頻道洗爆。
 
 ## 本機測試 PostgreSQL（Docker）
 

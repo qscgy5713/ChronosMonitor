@@ -12,6 +12,7 @@ import (
 	"chronosmonitor/internal/config"
 	"chronosmonitor/internal/db"
 	"chronosmonitor/internal/handlers"
+	"chronosmonitor/internal/notifier"
 	"chronosmonitor/internal/router"
 	"chronosmonitor/internal/store"
 	"chronosmonitor/internal/sweeper"
@@ -43,6 +44,13 @@ func main() {
 
 	ttlSweeper := sweeper.New(taskStore, hub, cfg.TTLSweepInterval)
 	go ttlSweeper.Run(ctx)
+
+	if cfg.AlertWebhookURL != "" {
+		n := notifier.NewWebhookNotifier(cfg.AlertWebhookURL, notifier.Format(cfg.AlertWebhookFormat))
+		dispatcher := notifier.NewDispatcher(hub, n, cfg.AlertRateLimitPerMinute, time.Minute)
+		go dispatcher.Run(ctx)
+		log.Printf("alerting enabled: %s webhook, rate limit %d/min", cfg.AlertWebhookFormat, cfg.AlertRateLimitPerMinute)
+	}
 
 	go func() {
 		log.Printf("ChronosMonitor server listening on :%s", cfg.Port)
