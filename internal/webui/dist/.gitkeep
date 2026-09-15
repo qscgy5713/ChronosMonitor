@@ -1,0 +1,4 @@
+This directory is populated by `npm run build` in web/ (see Makefile's
+`build` target) and embedded into the Go binary via go:embed. Its real
+contents are gitignored; this placeholder only keeps the directory non-empty
+so `go build` succeeds on a fresh checkout before the frontend is built.

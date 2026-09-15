@@ -1,0 +1,10 @@
+data/
+*.db
+*.db-journal
+
+web/node_modules/
+
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
+
+/chronosmonitor

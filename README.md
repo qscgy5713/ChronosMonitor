@@ -1,0 +1,239 @@
+# ChronosMonitor
+
+跨語言、輕量級的排程任務監控面板。任何語言的 worker（Laravel cron、Go 背景服務、Node.js script...）只要透過簡單的 HTTP API 回報任務狀態，就能在一個即時儀表板上看到執行中任務、失敗任務、逾時警告與耗時統計。
+
+不需要 agent、不需要在目標主機裝東西——單一 Go 執行檔內建前端，複製過去執行就能用。
+
+## 系統架構
+
+```mermaid
+graph TD
+    subgraph Client [Client Applications]
+        L[Laravel Cron] -->|HTTP POST| API
+        G[Go Worker] -->|HTTP POST| API
+        N[Node.js Script] -->|HTTP POST| API
+    end
+
+    subgraph ChronosMonitor [Chronos Monitor Server]
+        API[HTTP API Server] --> EB[Event Broker]
+        EB --> DB[(SQLite / PostgreSQL)]
+        EB --> WS[WebSocket / SSE Server]
+    end
+
+    subgraph Dashboard [Web UI]
+        Vue[Vue 3 SPA] <-->|WebSocket| WS
+        Vue <-->|HTTP GET| API
+    end
+```
+
+> 目前實作用的是 SSE，不是圖上寫的 WebSocket（單向推播場景 SSE 更簡單，效果相同）。
+
+任務不會被「偵測」到——ChronosMonitor 完全是被動接收回報的架構：worker/cron 自己主動呼叫 API 才會被記錄，沒有呼叫就不存在。詳見下方 [API](#api) 與 [demo-worker](#demo-worker本機模擬任務) 章節。
+
+## 功能
+
+- **HTTP 狀態回報 API**：`start` / `heartbeat` / `success` / `failed`
+- **即時監控儀表板**：Vue 3 + SSE，狀態變化立即反映，不用重新整理
+- **任務逾期警告（TTL）**：任務超過宣告的時間沒有心跳/完成，自動標記為 `timeout`
+- **錯誤堆疊追蹤**：失敗任務可夾帶 `error_message`（含 stack trace），直接在面板上看
+- **SQLite / PostgreSQL 雙資料庫支援**：預設零依賴 SQLite，設定環境變數即可切換 PostgreSQL
+- **單一執行檔部署**：前端建置產物透過 `go:embed` 打包進二進位檔
+
+## 技術棧
+
+| 層 | 技術 |
+|---|---|
+| 後端 | Go + [Gin](https://github.com/gin-gonic/gin) |
+| 前端 | Vue 3（Composition API）+ Tailwind CSS + Vite |
+| 資料庫 | SQLite（[modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite)，純 Go 無 CGO）/ PostgreSQL（[pgx](https://github.com/jackc/pgx)） |
+| 即時通訊 | Server-Sent Events（SSE） |
+
+## 專案結構
+
+```
+cmd/
+  server/          進入點：組裝 config / db / store / broker / sweeper / router
+  demo-worker/      範例 worker，示範如何用 HTTP 呼叫回報任務狀態
+internal/
+  config/          環境變數設定
+  db/              資料庫連線，SQLite/Postgres 切換與 SQL placeholder 轉換
+  models/          TaskRun 資料模型
+  store/           task_runs 資料存取層（含 TTL 掃描邏輯）
+  broker/          記憶體內 pub/sub，供 SSE 推播用
+  sweeper/         背景 goroutine，定期掃描逾期任務
+  handlers/        Gin handler（HTTP API + SSE stream）
+  router/          路由註冊、內嵌前端靜態檔案伺服
+  webui/           go:embed 內嵌前端 build 產物
+web/               Vue 3 前端（Vite 專案）
+Makefile
+```
+
+## 快速開始
+
+### 開發模式（雙 process，前端熱重載）
+
+```bash
+# 後端：http://localhost:8080
+make dev-backend
+
+# 前端：http://localhost:5173（會自動 proxy /api 到 8080）
+make dev-frontend
+```
+
+開發時打開 `http://localhost:5173` 看畫面。
+
+### 單一執行檔（模擬正式部署）
+
+```bash
+make build   # 建前端 -> embed -> go build，產生 ./chronosmonitor
+./chronosmonitor
+```
+
+打開 `http://localhost:8080` 即可看到儀表板，API 與前端同一個 port。
+
+### demo-worker：本機模擬任務
+
+`cmd/demo-worker` 是一個假的 Go worker，純粹示範「怎麼從你自己的程式碼呼叫 ChronosMonitor 的 API」——不是產品的一部分，只是本機展示用。
+
+```bash
+go run ./cmd/demo-worker
+```
+
+行為：每 3 秒跑一個假任務（`nightly-backup` / `invoice-sync` / `email-digest` / `report-export` 隨機挑一個），呼叫 `POST /api/v1/events/start` 後依機率模擬三種結局：
+
+| 機率 | 情境 | 對應行為 |
+|---|---|---|
+| 70% | 成功 | 送 2 次 `heartbeat`，再送 `success`，`duration_ms` 約 900ms |
+| 20% | 失敗 | 400ms 後送 `failed`，帶一段假的 stack trace 當 `error_message` |
+| 10% | 卡住不放 | 呼叫 `start` 之後完全不再回報任何事件，永遠停在 `running` |
+
+另外，每次 `start` 有獨立的 10% 機率會帶上 `ttl_seconds: 3`——如果剛好跟「卡住不放」的情境同時中，那筆任務會在 3 秒後被 sweeper 標記成 `timeout`，可以在儀表板上看到逾期效果（畢竟是機率疊機率，多跑幾輪、或縮短輪詢間隔比較容易碰到）。
+
+可用環境變數：
+
+| 變數 | 預設值 | 說明 |
+|---|---|---|
+| `CHRONOS_BASE_URL` | `http://localhost:8080` | ChronosMonitor server 的位址 |
+
+想連到別台機器上的 ChronosMonitor 測試：
+
+```bash
+CHRONOS_BASE_URL=http://your-host:8080 go run ./cmd/demo-worker
+```
+
+## 環境變數
+
+| 變數 | 預設值 | 說明 |
+|---|---|---|
+| `CHRONOS_PORT` | `8080` | HTTP 監聽 port |
+| `CHRONOS_DB_DRIVER` | `sqlite` | `sqlite` 或 `postgres` |
+| `CHRONOS_DB_PATH` | `data/chronos.db` | SQLite 檔案路徑（`CHRONOS_DB_DRIVER=sqlite` 時使用） |
+| `CHRONOS_DB_DSN` | (空) | PostgreSQL 連線字串，例：`postgres://user:pass@host:5432/db?sslmode=disable`（`CHRONOS_DB_DRIVER=postgres` 時必填） |
+| `CHRONOS_TTL_SWEEP_INTERVAL_SECONDS` | `30` | TTL 逾期掃描的間隔秒數 |
+
+## 本機測試 PostgreSQL（Docker）
+
+不想裝 PostgreSQL 也能快速測：用 Docker 起一個暫時的容器即可，不需要額外的 docker-compose 設定檔。
+
+```bash
+# 1. 起一個暫時的 PostgreSQL 容器
+docker run -d --name chronos-pg \
+  -e POSTGRES_PASSWORD=chronos \
+  -e POSTGRES_DB=chronosmonitor \
+  -p 15432:5432 \
+  postgres:16-alpine
+
+# 2. 等它 ready
+docker exec chronos-pg pg_isready -U postgres
+
+# 3. 用 postgres 模式啟動 ChronosMonitor（會自動建表，不用手動 migrate）
+CHRONOS_DB_DRIVER=postgres \
+CHRONOS_DB_DSN="postgres://postgres:chronos@localhost:15432/chronosmonitor?sslmode=disable" \
+go run ./cmd/server
+```
+
+測完清掉容器：
+
+```bash
+docker rm -f chronos-pg
+```
+
+正式環境上串接既有的 PostgreSQL，只要把 `CHRONOS_DB_DSN` 換成真正的連線字串即可，不需要額外設定，schema 會在啟動時自動 migrate。
+
+## API
+
+所有回報類 API 都是 `POST`，`Content-Type: application/json`。
+
+### `POST /api/v1/events/start`
+
+回報任務開始。`run_id` 選填，不給的話由伺服器產生 UUID；`ttl_seconds` 選填，不給就永不逾期。
+
+```json
+// request
+{ "task_name": "daily-report", "source": "laravel-cron", "ttl_seconds": 300 }
+
+// response 201
+{ "run_id": "2d62bf7e-..." }
+```
+
+### `POST /api/v1/events/heartbeat`
+
+回報存活，會重置 TTL 計時。
+
+```json
+{ "run_id": "2d62bf7e-..." }
+```
+
+### `POST /api/v1/events/success`
+
+回報成功，伺服器自動計算 `duration_ms`。
+
+```json
+{ "run_id": "2d62bf7e-..." }
+```
+
+### `POST /api/v1/events/failed`
+
+回報失敗，可附帶錯誤訊息/stack trace。
+
+```json
+{ "run_id": "2d62bf7e-...", "error_message": "Traceback ...\n  connection refused" }
+```
+
+### `GET /api/v1/tasks?status=`
+
+列出最近 200 筆任務，依開始時間新到舊排序。`status` 選填（`running` / `success` / `failed` / `timeout`）。
+
+### `GET /api/v1/tasks/:runID`
+
+查詢單一任務。
+
+### `GET /api/v1/stream`
+
+SSE endpoint，前端用 `new EventSource('/api/v1/stream')` 訂閱。事件類型：
+
+| Event | 觸發時機 |
+|---|---|
+| `task.started` | 任務開始 |
+| `task.heartbeat` | 收到心跳 |
+| `task.succeeded` | 任務成功 |
+| `task.failed` | 任務失敗 |
+| `task.timeout` | TTL 逾期被判定為 timeout |
+
+每個事件的 `data` 都是完整的任務物件（JSON）。
+
+### `GET /healthz`
+
+健康檢查。
+
+## 測試
+
+```bash
+make test   # go test ./... -race
+```
+
+涵蓋 store（含 TTL 時間比較邏輯）、broker（並發語意）、handlers（API 契約）、router（含 SPA fallback 的 regression test）、sweeper、db（SQL placeholder 轉換）等後端核心邏輯。前端目前是薄的展示層，未另外加測試。
+
+## 授權
+
+尚未指定授權條款。
