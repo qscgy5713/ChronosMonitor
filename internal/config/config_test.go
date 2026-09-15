@@ -29,6 +29,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AlertRateLimitPerMinute != 10 {
 		t.Errorf("AlertRateLimitPerMinute = %d, want 10", cfg.AlertRateLimitPerMinute)
 	}
+	if cfg.APIKey != "" {
+		t.Errorf("APIKey = %q, want empty (auth disabled by default)", cfg.APIKey)
+	}
 }
 
 func TestLoadReadsEnvOverrides(t *testing.T) {
@@ -39,6 +42,7 @@ func TestLoadReadsEnvOverrides(t *testing.T) {
 	t.Setenv("CHRONOS_ALERT_WEBHOOK_URL", "https://hooks.example.com/x")
 	t.Setenv("CHRONOS_ALERT_WEBHOOK_FORMAT", "discord")
 	t.Setenv("CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE", "3")
+	t.Setenv("CHRONOS_API_KEY", "secret-key")
 
 	cfg := Load()
 
@@ -62,5 +66,8 @@ func TestLoadReadsEnvOverrides(t *testing.T) {
 	}
 	if cfg.AlertRateLimitPerMinute != 3 {
 		t.Errorf("AlertRateLimitPerMinute = %d, want 3", cfg.AlertRateLimitPerMinute)
+	}
+	if cfg.APIKey != "secret-key" {
+		t.Errorf("APIKey = %q, want secret-key", cfg.APIKey)
 	}
 }

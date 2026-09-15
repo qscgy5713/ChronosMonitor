@@ -28,6 +28,11 @@ type Config struct {
 	// minute, so a burst of simultaneous failures (e.g. a shared dependency
 	// going down) doesn't flood the notification channel. 0 disables the cap.
 	AlertRateLimitPerMinute int
+
+	// APIKey, when set, is required (as "Authorization: Bearer <key>" or a
+	// "?token=<key>" query param) on every /api/v1/* request. Empty disables
+	// auth entirely — the default, for backwards compatibility.
+	APIKey string
 }
 
 func Load() Config {
@@ -40,6 +45,7 @@ func Load() Config {
 		AlertWebhookURL:         getEnv("CHRONOS_ALERT_WEBHOOK_URL", ""),
 		AlertWebhookFormat:      getEnv("CHRONOS_ALERT_WEBHOOK_FORMAT", "slack"),
 		AlertRateLimitPerMinute: getEnvInt("CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE", 10),
+		APIKey:                  getEnv("CHRONOS_API_KEY", ""),
 	}
 }
 

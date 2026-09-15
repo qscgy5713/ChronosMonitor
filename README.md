@@ -37,6 +37,7 @@ graph TD
 - **任務逾期警告（TTL）**：任務超過宣告的時間沒有心跳/完成，自動標記為 `timeout`
 - **錯誤堆疊追蹤**：失敗任務可夾帶 `error_message`（含 stack trace），直接在面板上看
 - **告警通知**：任務失敗/逾時可透過 webhook 通知 Slack / Discord，內建頻率限制避免洗版
+- **API 認證**：可選的 API key，保護回報端點不被亂打（尤其是接了告警之後，沒認證等於誰都能發假失敗事件洗你的 Slack）
 - **SQLite / PostgreSQL 雙資料庫支援**：預設零依賴 SQLite，設定環境變數即可切換 PostgreSQL
 - **單一執行檔部署**：前端建置產物透過 `go:embed` 打包進二進位檔
 
@@ -135,6 +136,28 @@ CHRONOS_BASE_URL=http://your-host:8080 go run ./cmd/demo-worker
 | `CHRONOS_ALERT_WEBHOOK_URL` | (空) | 設定後啟用告警；任務 `failed` / `timeout` 時會 POST 到這個 URL。不設定就完全不啟用（預設） |
 | `CHRONOS_ALERT_WEBHOOK_FORMAT` | `slack` | `slack`（`{"text":...}`，Mattermost 等 Slack-compatible 服務也吃這個格式）/ `discord`（`{"content":...}`）/ `generic`（原始任務 JSON，接自己的系統用） |
 | `CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE` | `10` | 每分鐘最多送出幾則告警，超過的直接丟棄並記 log，避免大量任務同時失敗時洗版。設 `0` 表示不限制 |
+| `CHRONOS_API_KEY` | (空) | 設定後，整個 `/api/v1/*`（含回報跟查詢）都需要帶這把 key 才能存取。不設定就完全不需要認證（預設，向下相容） |
+
+## API 認證
+
+`CHRONOS_API_KEY` 有設定值才會啟用，保護範圍是**整個 `/api/v1/*`**——回報端點（`start`/`heartbeat`/`success`/`failed`）跟查詢端點（`tasks`/`stream`）都要帶 key。`/healthz` 跟前端頁面本身不受影響（不然連登入畫面都載不出來）。
+
+```bash
+CHRONOS_API_KEY=some-long-random-string ./chronosmonitor
+```
+
+worker 端呼叫 API 時帶 header：
+
+```bash
+curl -X POST localhost:8080/api/v1/events/start \
+  -H "Authorization: Bearer some-long-random-string" \
+  -H 'Content-Type: application/json' \
+  -d '{"task_name":"daily-report"}'
+```
+
+瀏覽器原生的 `EventSource`（SSE 用）沒辦法自訂 header，所以 `/api/v1/stream` 也接受用 query string 帶 key：`/api/v1/stream?token=some-long-random-string`。儀表板前端會自動處理這件事——第一次打開時若偵測到 401，會跳出一個輸入 API key 的畫面，輸入後存在瀏覽器的 `localStorage`，之後就不用再輸入。
+
+`cmd/demo-worker` 也支援 `CHRONOS_API_KEY` 環境變數，設定跟連 server 用的值一致即可。
 
 ## 告警通知
 
@@ -205,7 +228,7 @@ docker rm -f chronos-pg
 
 ## API
 
-所有回報類 API 都是 `POST`，`Content-Type: application/json`。
+所有回報類 API 都是 `POST`，`Content-Type: application/json`。若設定了 `CHRONOS_API_KEY`，以下所有 `/api/v1/*` 端點都需要帶 `Authorization: Bearer <key>`（見上方「API 認證」章節）。
 
 ### `POST /api/v1/events/start`
 

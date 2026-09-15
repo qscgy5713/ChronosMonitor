@@ -1,6 +1,7 @@
 package router
 
 import (
+	"crypto/subtle"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -10,7 +11,14 @@ import (
 	"chronosmonitor/internal/handlers"
 )
 
-func New(taskHandler *handlers.TaskHandler, streamHandler *handlers.StreamHandler, assets fs.FS) *gin.Engine {
+// New builds the HTTP router. When apiKey is non-empty, every /api/v1/*
+// request must present it as "Authorization: Bearer <key>" or "?token=<key>"
+// (the latter exists because the browser's native EventSource API can't set
+// custom headers, so the SSE stream has nothing else to authenticate with).
+// /healthz and the embedded dashboard stay unauthenticated: health checks
+// need to work regardless, and the SPA shell has to load before it can even
+// prompt for a key.
+func New(taskHandler *handlers.TaskHandler, streamHandler *handlers.StreamHandler, assets fs.FS, apiKey string) *gin.Engine {
 	r := gin.Default()
 
 	r.GET("/healthz", func(c *gin.Context) {
@@ -18,6 +26,7 @@ func New(taskHandler *handlers.TaskHandler, streamHandler *handlers.StreamHandle
 	})
 
 	v1 := r.Group("/api/v1")
+	v1.Use(requireAPIKey(apiKey))
 	{
 		events := v1.Group("/events")
 		events.POST("/start", taskHandler.Start)
@@ -34,6 +43,36 @@ func New(taskHandler *handlers.TaskHandler, streamHandler *handlers.StreamHandle
 	r.NoRoute(serveEmbeddedUI(assets))
 
 	return r
+}
+
+// requireAPIKey rejects any request that doesn't present apiKey via the
+// standard bearer-token header or (for clients that can't set headers, like
+// EventSource) a "token" query param. An empty apiKey disables auth entirely
+// — the default, so existing deployments aren't broken by upgrading.
+func requireAPIKey(apiKey string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if apiKey == "" {
+			c.Next()
+			return
+		}
+
+		if !constantTimeEqual(bearerToken(c), apiKey) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or missing API key"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func bearerToken(c *gin.Context) string {
+	if auth := c.GetHeader("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	return c.Query("token")
+}
+
+func constantTimeEqual(a, b string) bool {
+	return len(a) == len(b) && subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // serveEmbeddedUI serves the embedded Vue dashboard build for any request

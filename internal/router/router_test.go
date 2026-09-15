@@ -19,6 +19,11 @@ import (
 
 func newTestRouter(t *testing.T, assets fstest.MapFS) *gin.Engine {
 	t.Helper()
+	return newTestRouterWithAPIKey(t, assets, "")
+}
+
+func newTestRouterWithAPIKey(t *testing.T, assets fstest.MapFS, apiKey string) *gin.Engine {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	conn, err := db.Open(config.Config{
@@ -34,7 +39,7 @@ func newTestRouter(t *testing.T, assets fstest.MapFS) *gin.Engine {
 	taskHandler := handlers.NewTaskHandler(store.NewTaskStore(conn), hub)
 	streamHandler := handlers.NewStreamHandler(hub)
 
-	return New(taskHandler, streamHandler, assets)
+	return New(taskHandler, streamHandler, assets, apiKey)
 }
 
 func fakeAssets() fstest.MapFS {
@@ -118,5 +123,69 @@ func TestKnownAPIRoutesAreNotShadowedByStaticFallback(t *testing.T) {
 	w = get(t, r, "/api/v1/tasks")
 	if w.Code != http.StatusOK {
 		t.Fatalf("/api/v1/tasks status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestAPIRoutesAreOpenWhenNoAPIKeyConfigured(t *testing.T) {
+	r := newTestRouterWithAPIKey(t, fakeAssets(), "")
+
+	w := get(t, r, "/api/v1/tasks")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (auth disabled by default)", w.Code, http.StatusOK)
+	}
+}
+
+func TestAPIRoutesRejectMissingOrWrongKey(t *testing.T) {
+	r := newTestRouterWithAPIKey(t, fakeAssets(), "correct-key")
+
+	w := get(t, r, "/api/v1/tasks")
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("no key: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req.Header.Set("Authorization", "Bearer wrong-key")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("wrong key: status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAPIRoutesAcceptKeyViaAuthorizationHeader(t *testing.T) {
+	r := newTestRouterWithAPIKey(t, fakeAssets(), "correct-key")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+	req.Header.Set("Authorization", "Bearer correct-key")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestAPIRoutesAcceptKeyViaQueryParam(t *testing.T) {
+	// EventSource can't set custom headers, so the SSE route must also accept
+	// the key as a query param.
+	r := newTestRouterWithAPIKey(t, fakeAssets(), "correct-key")
+
+	w := get(t, r, "/api/v1/tasks?token=correct-key")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestHealthzAndDashboardStayOpenWhenAPIKeyConfigured(t *testing.T) {
+	r := newTestRouterWithAPIKey(t, fakeAssets(), "correct-key")
+
+	w := get(t, r, "/healthz")
+	if w.Code != http.StatusOK {
+		t.Errorf("/healthz status = %d, want %d (must stay open for health checks)", w.Code, http.StatusOK)
+	}
+
+	w = get(t, r, "/")
+	if w.Code != http.StatusOK {
+		t.Errorf("/ status = %d, want %d (dashboard shell must load before it can prompt for a key)", w.Code, http.StatusOK)
 	}
 }

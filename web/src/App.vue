@@ -3,13 +3,26 @@ import { useTasks } from './composables/useTasks'
 import StatCard from './components/StatCard.vue'
 import TaskTable from './components/TaskTable.vue'
 import FailurePanel from './components/FailurePanel.vue'
+import ApiKeyGate from './components/ApiKeyGate.vue'
 import { formatDuration } from './utils/format'
 
-const { taskList, stats, recentFailures, connected } = useTasks()
+const {
+  taskList,
+  stats,
+  recentFailures,
+  connected,
+  unauthorized,
+  submitApiKey,
+} = useTasks()
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+  <ApiKeyGate v-if="unauthorized" @submit="submitApiKey" />
+
+  <div
+    v-else
+    class="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100"
+  >
     <header
       class="border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900"
     >

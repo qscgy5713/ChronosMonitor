@@ -1,4 +1,5 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { getStoredApiKey, setStoredApiKey } from '../utils/apiKey'
 
 const EVENT_TYPES = [
   'task.started',
@@ -11,15 +12,27 @@ const EVENT_TYPES = [
 export function useTasks() {
   const tasks = reactive(new Map())
   const connected = ref(false)
+  const unauthorized = ref(false)
+  const apiKey = ref(getStoredApiKey())
   let eventSource = null
 
   function upsert(task) {
     tasks.set(task.run_id, task)
   }
 
+  function authHeaders() {
+    return apiKey.value ? { Authorization: `Bearer ${apiKey.value}` } : {}
+  }
+
   async function loadInitial() {
-    const res = await fetch('/api/v1/tasks')
+    const res = await fetch('/api/v1/tasks', { headers: authHeaders() })
+    if (res.status === 401) {
+      unauthorized.value = true
+      return
+    }
+    unauthorized.value = false
     if (!res.ok) return
+
     const body = await res.json()
     for (const task of body.tasks ?? []) {
       upsert(task)
@@ -27,7 +40,15 @@ export function useTasks() {
   }
 
   function connect() {
-    eventSource = new EventSource('/api/v1/stream')
+    eventSource?.close()
+
+    // EventSource can't set custom headers, so an API key has to travel as a
+    // query param instead — the backend accepts either.
+    const url = apiKey.value
+      ? `/api/v1/stream?token=${encodeURIComponent(apiKey.value)}`
+      : '/api/v1/stream'
+
+    eventSource = new EventSource(url)
     eventSource.onopen = () => {
       connected.value = true
     }
@@ -41,9 +62,20 @@ export function useTasks() {
     }
   }
 
+  async function submitApiKey(key) {
+    apiKey.value = key
+    setStoredApiKey(key)
+    await loadInitial()
+    if (!unauthorized.value) {
+      connect()
+    }
+  }
+
   onMounted(async () => {
     await loadInitial()
-    connect()
+    if (!unauthorized.value) {
+      connect()
+    }
   })
 
   onUnmounted(() => {
@@ -85,5 +117,12 @@ export function useTasks() {
       .slice(0, 10),
   )
 
-  return { taskList, stats, recentFailures, connected }
+  return {
+    taskList,
+    stats,
+    recentFailures,
+    connected,
+    unauthorized,
+    submitApiKey,
+  }
 }

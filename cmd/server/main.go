@@ -32,7 +32,12 @@ func main() {
 	hub := broker.New()
 	taskHandler := handlers.NewTaskHandler(taskStore, hub)
 	streamHandler := handlers.NewStreamHandler(hub)
-	r := router.New(taskHandler, streamHandler, webui.Assets())
+	r := router.New(taskHandler, streamHandler, webui.Assets(), cfg.APIKey)
+	if cfg.APIKey != "" {
+		log.Println("API authentication enabled")
+	} else {
+		log.Println("API authentication disabled (set CHRONOS_API_KEY to enable)")
+	}
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,

@@ -15,6 +15,7 @@ import (
 )
 
 var baseURL = getEnv("CHRONOS_BASE_URL", "http://localhost:8080")
+var apiKey = getEnv("CHRONOS_API_KEY", "")
 
 var taskNames = []string{"nightly-backup", "invoice-sync", "email-digest", "report-export"}
 
@@ -96,7 +97,16 @@ func postJSON(path string, body, out any) error {
 		return err
 	}
 
-	resp, err := http.Post(baseURL+path, "application/json", bytes.NewReader(b))
+	req, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
