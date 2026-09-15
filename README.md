@@ -43,6 +43,7 @@ graph TD
 - **SQLite / PostgreSQL 雙資料庫支援**：預設零依賴 SQLite，設定環境變數即可切換 PostgreSQL
 - **單一執行檔部署**：前端建置產物透過 `go:embed` 打包進二進位檔
 - **Docker / docker-compose 部署**：`docker compose up` 一鍵跑起來，image 約 38MB（`scratch` + 純 Go 靜態編譯，無 CGO）
+- **Laravel 整合套件**：`$schedule->command(...)->chronos('task-name')` 一行接上回報 + missed-run 偵測，不用改指令邏輯，見 [`clients/laravel`](clients/laravel/README.md)
 
 ## 技術棧
 
@@ -73,6 +74,8 @@ internal/
   router/          路由註冊、內嵌前端靜態檔案伺服
   webui/           go:embed 內嵌前端 build 產物
 web/               Vue 3 前端（Vite 專案）
+clients/
+  laravel/         Laravel 整合套件，見 clients/laravel/README.md
 Makefile
 ```
 
