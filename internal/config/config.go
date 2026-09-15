@@ -33,6 +33,15 @@ type Config struct {
 	// "?token=<key>" query param) on every /api/v1/* request. Empty disables
 	// auth entirely — the default, for backwards compatibility.
 	APIKey string
+
+	// RetentionDays, when > 0, enables a background job that permanently
+	// deletes finished (success/failed/timeout) task runs older than this
+	// many days. 0 (the default) keeps everything forever. Running tasks are
+	// never deleted regardless of age.
+	RetentionDays int
+	// RetentionSweepInterval controls how often the retention job checks for
+	// data to delete.
+	RetentionSweepInterval time.Duration
 }
 
 func Load() Config {
@@ -46,6 +55,8 @@ func Load() Config {
 		AlertWebhookFormat:      getEnv("CHRONOS_ALERT_WEBHOOK_FORMAT", "slack"),
 		AlertRateLimitPerMinute: getEnvInt("CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE", 10),
 		APIKey:                  getEnv("CHRONOS_API_KEY", ""),
+		RetentionDays:           getEnvInt("CHRONOS_RETENTION_DAYS", 0),
+		RetentionSweepInterval:  getEnvSeconds("CHRONOS_RETENTION_SWEEP_INTERVAL_SECONDS", 3600) * time.Second,
 	}
 }
 

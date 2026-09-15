@@ -125,6 +125,21 @@ func (s *TaskStore) SweepTimeouts(now time.Time) ([]models.TaskRun, error) {
 	return timedOut, nil
 }
 
+// DeleteOlderThan permanently removes finished (success/failed/timeout) task
+// runs whose finished_at is older than cutoff. Running tasks are never
+// touched, no matter how old — only ones that actually completed. It returns
+// the number of rows deleted.
+func (s *TaskStore) DeleteOlderThan(cutoff time.Time) (int64, error) {
+	res, err := s.db.Exec(
+		`DELETE FROM task_runs WHERE finished_at IS NOT NULL AND finished_at < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (s *TaskStore) Get(runID string) (*models.TaskRun, error) {
 	row := s.db.QueryRow(
 		`SELECT run_id, task_name, source, status, started_at, finished_at, last_heartbeat_at, ttl_seconds, duration_ms, error_message

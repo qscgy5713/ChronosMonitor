@@ -13,6 +13,7 @@ import (
 	"chronosmonitor/internal/db"
 	"chronosmonitor/internal/handlers"
 	"chronosmonitor/internal/notifier"
+	"chronosmonitor/internal/retention"
 	"chronosmonitor/internal/router"
 	"chronosmonitor/internal/store"
 	"chronosmonitor/internal/sweeper"
@@ -55,6 +56,12 @@ func main() {
 		dispatcher := notifier.NewDispatcher(hub, n, cfg.AlertRateLimitPerMinute, time.Minute)
 		go dispatcher.Run(ctx)
 		log.Printf("alerting enabled: %s webhook, rate limit %d/min", cfg.AlertWebhookFormat, cfg.AlertRateLimitPerMinute)
+	}
+
+	if cfg.RetentionDays > 0 {
+		cleaner := retention.New(taskStore, cfg.RetentionDays, cfg.RetentionSweepInterval)
+		go cleaner.Run(ctx)
+		log.Printf("retention cleanup enabled: keeping finished tasks for %d day(s)", cfg.RetentionDays)
 	}
 
 	go func() {

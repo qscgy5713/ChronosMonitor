@@ -32,6 +32,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.APIKey != "" {
 		t.Errorf("APIKey = %q, want empty (auth disabled by default)", cfg.APIKey)
 	}
+	if cfg.RetentionDays != 0 {
+		t.Errorf("RetentionDays = %d, want 0 (retention disabled by default)", cfg.RetentionDays)
+	}
+	if cfg.RetentionSweepInterval != time.Hour {
+		t.Errorf("RetentionSweepInterval = %v, want 1h", cfg.RetentionSweepInterval)
+	}
 }
 
 func TestLoadReadsEnvOverrides(t *testing.T) {
@@ -43,6 +49,8 @@ func TestLoadReadsEnvOverrides(t *testing.T) {
 	t.Setenv("CHRONOS_ALERT_WEBHOOK_FORMAT", "discord")
 	t.Setenv("CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE", "3")
 	t.Setenv("CHRONOS_API_KEY", "secret-key")
+	t.Setenv("CHRONOS_RETENTION_DAYS", "90")
+	t.Setenv("CHRONOS_RETENTION_SWEEP_INTERVAL_SECONDS", "60")
 
 	cfg := Load()
 
@@ -69,5 +77,11 @@ func TestLoadReadsEnvOverrides(t *testing.T) {
 	}
 	if cfg.APIKey != "secret-key" {
 		t.Errorf("APIKey = %q, want secret-key", cfg.APIKey)
+	}
+	if cfg.RetentionDays != 90 {
+		t.Errorf("RetentionDays = %d, want 90", cfg.RetentionDays)
+	}
+	if cfg.RetentionSweepInterval != 60*time.Second {
+		t.Errorf("RetentionSweepInterval = %v, want 60s", cfg.RetentionSweepInterval)
 	}
 }

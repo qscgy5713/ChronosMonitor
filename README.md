@@ -38,6 +38,7 @@ graph TD
 - **錯誤堆疊追蹤**：失敗任務可夾帶 `error_message`（含 stack trace），直接在面板上看
 - **告警通知**：任務失敗/逾時可透過 webhook 通知 Slack / Discord，內建頻率限制避免洗版
 - **API 認證**：可選的 API key，保護回報端點不被亂打（尤其是接了告警之後，沒認證等於誰都能發假失敗事件洗你的 Slack）
+- **資料保留/清理**：可選的背景清理工作，自動刪除超過保留期限的已結束任務，避免資料表無限長大；`running` 狀態不管多舊都不會被清
 - **SQLite / PostgreSQL 雙資料庫支援**：預設零依賴 SQLite，設定環境變數即可切換 PostgreSQL
 - **單一執行檔部署**：前端建置產物透過 `go:embed` 打包進二進位檔
 - **Docker / docker-compose 部署**：`docker compose up` 一鍵跑起來，image 約 38MB（`scratch` + 純 Go 靜態編譯，無 CGO）
@@ -65,6 +66,7 @@ internal/
   broker/          記憶體內 pub/sub，供 SSE 推播與告警訂閱用
   sweeper/         背景 goroutine，定期掃描逾期任務
   notifier/        失敗/逾時告警：webhook 訊息格式化 + 頻率限制 dispatcher
+  retention/       背景 goroutine，定期刪除超過保留期限的已結束任務
   handlers/        Gin handler（HTTP API + SSE stream）
   router/          路由註冊、內嵌前端靜態檔案伺服
   webui/           go:embed 內嵌前端 build 產物
@@ -169,6 +171,18 @@ CHRONOS_BASE_URL=http://your-host:8080 go run ./cmd/demo-worker
 | `CHRONOS_ALERT_WEBHOOK_FORMAT` | `slack` | `slack`（`{"text":...}`，Mattermost 等 Slack-compatible 服務也吃這個格式）/ `discord`（`{"content":...}`）/ `generic`（原始任務 JSON，接自己的系統用） |
 | `CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE` | `10` | 每分鐘最多送出幾則告警，超過的直接丟棄並記 log，避免大量任務同時失敗時洗版。設 `0` 表示不限制 |
 | `CHRONOS_API_KEY` | (空) | 設定後，整個 `/api/v1/*`（含回報跟查詢）都需要帶這把 key 才能存取。不設定就完全不需要認證（預設，向下相容） |
+| `CHRONOS_RETENTION_DAYS` | `0` | 已結束任務的保留天數，超過就會被自動刪除。`0` 表示永久保留（預設） |
+| `CHRONOS_RETENTION_SWEEP_INTERVAL_SECONDS` | `3600` | 清理工作的檢查間隔秒數（預設 1 小時） |
+
+## 資料保留
+
+`CHRONOS_RETENTION_DAYS` 有設定值（> 0）才會啟用。只刪除已經結束的任務（`success` / `failed` / `timeout`），依 `finished_at` 判斷是否超過保留期限；`running` 狀態的任務不管多舊都不會被刪。
+
+```bash
+CHRONOS_RETENTION_DAYS=90 ./chronosmonitor   # 只保留最近 90 天的已結束任務
+```
+
+啟動時會立刻跑一次清理（不會等到第一個檢查間隔才開始），之後依 `CHRONOS_RETENTION_SWEEP_INTERVAL_SECONDS` 定期執行。
 
 ## API 認證
 

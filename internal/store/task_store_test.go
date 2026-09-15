@@ -283,6 +283,76 @@ func TestSweepTimeoutsIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestDeleteOlderThanRemovesOnlyOldFinishedTasks(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+
+	// Old and finished: should be deleted.
+	mustCreate(t, s, models.TaskRun{
+		RunID: "old-success", TaskName: "a", Status: models.StatusRunning,
+		StartedAt: now.Add(-100 * 24 * time.Hour),
+	})
+	if err := s.Finish("old-success", models.StatusSuccess, "", now.Add(-100*24*time.Hour).Add(time.Minute)); err != nil {
+		t.Fatalf("Finish(old-success) error = %v", err)
+	}
+
+	// Recent and finished: should survive.
+	mustCreate(t, s, models.TaskRun{
+		RunID: "recent-failed", TaskName: "b", Status: models.StatusRunning,
+		StartedAt: now.Add(-time.Hour),
+	})
+	if err := s.Finish("recent-failed", models.StatusFailed, "boom", now.Add(-time.Hour).Add(time.Minute)); err != nil {
+		t.Fatalf("Finish(recent-failed) error = %v", err)
+	}
+
+	// Old but still running: must never be deleted, regardless of age.
+	mustCreate(t, s, models.TaskRun{
+		RunID: "old-running", TaskName: "c", Status: models.StatusRunning,
+		StartedAt: now.Add(-200 * 24 * time.Hour),
+	})
+
+	cutoff := now.Add(-30 * 24 * time.Hour)
+	deleted, err := s.DeleteOlderThan(cutoff)
+	if err != nil {
+		t.Fatalf("DeleteOlderThan() error = %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("DeleteOlderThan() deleted %d row(s), want 1", deleted)
+	}
+
+	if _, err := s.Get("old-success"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("old-success: err = %v, want ErrNotFound (should have been deleted)", err)
+	}
+	if _, err := s.Get("recent-failed"); err != nil {
+		t.Errorf("recent-failed was deleted, want it to survive: %v", err)
+	}
+	if _, err := s.Get("old-running"); err != nil {
+		t.Errorf("old-running (still running) was deleted, want it to survive regardless of age: %v", err)
+	}
+}
+
+func TestDeleteOlderThanIsIdempotent(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+
+	mustCreate(t, s, models.TaskRun{RunID: "old", TaskName: "a", Status: models.StatusRunning, StartedAt: now.Add(-100 * 24 * time.Hour)})
+	if err := s.Finish("old", models.StatusSuccess, "", now.Add(-100*24*time.Hour).Add(time.Minute)); err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+
+	cutoff := now.Add(-30 * 24 * time.Hour)
+	if _, err := s.DeleteOlderThan(cutoff); err != nil {
+		t.Fatalf("first DeleteOlderThan() error = %v", err)
+	}
+	second, err := s.DeleteOlderThan(cutoff)
+	if err != nil {
+		t.Fatalf("second DeleteOlderThan() error = %v", err)
+	}
+	if second != 0 {
+		t.Errorf("second DeleteOlderThan() deleted %d row(s), want 0 (nothing left to delete)", second)
+	}
+}
+
 func mustCreate(t *testing.T, s *TaskStore, task models.TaskRun) {
 	t.Helper()
 	if err := s.Create(task); err != nil {
