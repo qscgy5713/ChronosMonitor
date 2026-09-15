@@ -13,8 +13,9 @@ test:
 build-frontend:
 	cd web && npm install && npm run build
 	# vite's emptyOutDir wipes internal/webui/dist/.gitkeep on every build;
-	# put it back so `git status` doesn't show it as deleted.
-	touch internal/webui/dist/.gitkeep
+	# restore its committed content (a plain `touch` would leave it empty,
+	# which still shows as modified in `git status`).
+	git checkout -- internal/webui/dist/.gitkeep 2>/dev/null || true
 
 run: build
 	./$(BINARY)
@@ -30,4 +31,4 @@ dev-frontend:
 clean:
 	rm -f $(BINARY)
 	rm -rf internal/webui/dist/*
-	touch internal/webui/dist/.gitkeep
+	git checkout -- internal/webui/dist/.gitkeep 2>/dev/null || true

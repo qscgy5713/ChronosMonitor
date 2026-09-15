@@ -1,3 +1,5 @@
+import { ref } from 'vue'
+
 const STORAGE_KEY = 'chronos_api_key'
 
 // localStorage can throw (private browsing, blocked site data) — never let
@@ -16,4 +18,12 @@ export function setStoredApiKey(key) {
   } catch {
     // ignore
   }
+}
+
+// Shared across every composable that needs it (useTasks, useSchedules...)
+// so entering a key once in the ApiKeyGate updates all of them together.
+export const apiKey = ref(getStoredApiKey())
+
+export function authHeaders() {
+  return apiKey.value ? { Authorization: `Bearer ${apiKey.value}` } : {}
 }

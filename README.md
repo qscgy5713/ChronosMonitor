@@ -218,7 +218,7 @@ curl -X POST localhost:8080/api/v1/schedules \
 
 一旦超過期限沒收到，狀態會轉成 `missed` 並觸發一次告警（跟 `failed`/`timeout` 走同一條 webhook 管線）；之後在下次真的收到 `start`之前，不會重複告警轟炸。
 
-查詢目前所有排程狀態：`GET /api/v1/schedules`；取消追蹤：`DELETE /api/v1/schedules/:taskName`。
+查詢目前所有排程狀態：`GET /api/v1/schedules`；取消追蹤：`DELETE /api/v1/schedules/:taskName`。儀表板上也有對應的「排程監控」區塊，會列出所有註冊的排程、目前狀態、以及一鍵取消追蹤（每 15 秒輪詢一次，不是即時 SSE——排程狀態的變化沒有到需要即時推播的程度）。
 
 這個功能**完全是 opt-in**——沒有註冊過排程的 `task_name` 不受任何影響，跟現有行為完全相容。
 

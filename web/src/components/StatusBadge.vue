@@ -10,6 +10,8 @@ const styles = {
   failed: 'bg-red-500/10 text-red-600 dark:text-red-400 ring-red-500/20',
   timeout:
     'bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-amber-500/20',
+  ok: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 ring-emerald-500/20',
+  missed: 'bg-red-500/10 text-red-600 dark:text-red-400 ring-red-500/20',
 }
 
 const labels = {
@@ -17,6 +19,8 @@ const labels = {
   success: '成功',
   failed: '失敗',
   timeout: '逾時',
+  ok: '正常',
+  missed: '錯過',
 }
 </script>
 

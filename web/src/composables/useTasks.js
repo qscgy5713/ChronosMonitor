@@ -1,5 +1,5 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { getStoredApiKey, setStoredApiKey } from '../utils/apiKey'
+import { apiKey, authHeaders, setStoredApiKey } from '../utils/apiKey'
 
 const EVENT_TYPES = [
   'task.started',
@@ -13,15 +13,10 @@ export function useTasks() {
   const tasks = reactive(new Map())
   const connected = ref(false)
   const unauthorized = ref(false)
-  const apiKey = ref(getStoredApiKey())
   let eventSource = null
 
   function upsert(task) {
     tasks.set(task.run_id, task)
-  }
-
-  function authHeaders() {
-    return apiKey.value ? { Authorization: `Bearer ${apiKey.value}` } : {}
   }
 
   async function loadInitial() {

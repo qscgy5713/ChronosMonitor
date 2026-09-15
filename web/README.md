@@ -39,13 +39,17 @@ src/
   App.vue                    版面組裝
   composables/
     useTasks.js              資料層：抓初始清單 + 訂閱 SSE + 計算統計，畫面唯一的資料來源
+    useSchedules.js          排程資料層：輪詢 GET /api/v1/schedules（15 秒一次，非 SSE）
   components/
     StatCard.vue             KPI 卡片
-    StatusBadge.vue          狀態徽章（running/success/failed/timeout）
+    StatusBadge.vue          狀態徽章（running/success/failed/timeout/ok/missed）
     FailurePanel.vue         近期失敗/逾時清單，含 error_message stack trace
     TaskTable.vue            完整任務列表
+    ScheduleTable.vue        排程監控列表，含取消追蹤按鈕
+    ApiKeyGate.vue           API key 輸入表單（401 時觸發）
   utils/
     format.js                時間/耗時/ID 格式化
+    apiKey.js                共用的 API key 狀態（跨 composable 共用同一把 key）
 ```
 
 ## 運作方式
