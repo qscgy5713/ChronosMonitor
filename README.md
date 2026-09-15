@@ -40,6 +40,7 @@ graph TD
 - **API 認證**：可選的 API key，保護回報端點不被亂打（尤其是接了告警之後，沒認證等於誰都能發假失敗事件洗你的 Slack）
 - **SQLite / PostgreSQL 雙資料庫支援**：預設零依賴 SQLite，設定環境變數即可切換 PostgreSQL
 - **單一執行檔部署**：前端建置產物透過 `go:embed` 打包進二進位檔
+- **Docker / docker-compose 部署**：`docker compose up` 一鍵跑起來，image 約 38MB（`scratch` + 純 Go 靜態編譯，無 CGO）
 
 ## 技術棧
 
@@ -93,6 +94,37 @@ make build   # 建前端 -> embed -> go build，產生 ./chronosmonitor
 ```
 
 打開 `http://localhost:8080` 即可看到儀表板，API 與前端同一個 port。
+
+### Docker
+
+不裝 Go、Node、SQLite 工具鏈，一個指令跑起來（預設用 SQLite，資料存在 named volume）：
+
+```bash
+docker compose up -d
+```
+
+打開 `http://localhost:8080`。要用 PostgreSQL 而不是 SQLite，加 `--profile postgres` 順便帶起一個 PostgreSQL 容器：
+
+```bash
+CHRONOS_DB_DRIVER=postgres docker compose --profile postgres up -d
+```
+
+`docker-compose.yml` 沒有設 `depends_on` 卡健康檢查——靠 `restart: unless-stopped` 自動重試，所以**第一次啟動時 log 會看到幾次 `connection refused` 屬於正常現象**，等 PostgreSQL ready 後會自己接上。這是刻意的取捨：加 `depends_on` 健康檢查會讓 `postgres` service 即使沒開 `--profile postgres` 也被強制帶起來，違背它「選配」的設計。
+
+其他環境變數（`CHRONOS_API_KEY`、`CHRONOS_ALERT_WEBHOOK_URL` 等，見下方環境變數表）都可以直接用 shell 環境變數傳進去，`docker-compose.yml` 都接好了：
+
+```bash
+CHRONOS_API_KEY=some-secret CHRONOS_ALERT_WEBHOOK_URL=https://hooks.slack.com/xxx docker compose up -d
+```
+
+只想 build image 不透過 compose：
+
+```bash
+docker build -t chronosmonitor .
+docker run -d -p 8080:8080 -v chronos-data:/data chronosmonitor
+```
+
+Image 是 multi-stage build（Node 建前端 → Go 靜態編譯 → `scratch` runtime），因為 SQLite（modernc.org/sqlite）跟 PostgreSQL（pgx）driver 都是純 Go 實作、不需要 CGO，所以最終 image 只有一個執行檔 + CA 憑證，大小約 38MB。
 
 ### demo-worker：本機模擬任務
 

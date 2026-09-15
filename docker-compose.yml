@@ -1,0 +1,37 @@
+services:
+  chronosmonitor:
+    build: .
+    ports:
+      - "${CHRONOS_HOST_PORT:-8080}:8080"
+    environment:
+      CHRONOS_DB_DRIVER: ${CHRONOS_DB_DRIVER:-sqlite}
+      CHRONOS_DB_DSN: ${CHRONOS_DB_DSN:-postgres://postgres:chronos@postgres:5432/chronosmonitor?sslmode=disable}
+      CHRONOS_API_KEY: ${CHRONOS_API_KEY:-}
+      CHRONOS_ALERT_WEBHOOK_URL: ${CHRONOS_ALERT_WEBHOOK_URL:-}
+      CHRONOS_ALERT_WEBHOOK_FORMAT: ${CHRONOS_ALERT_WEBHOOK_FORMAT:-slack}
+      CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE: ${CHRONOS_ALERT_RATE_LIMIT_PER_MINUTE:-10}
+    volumes:
+      - chronos-data:/data
+    restart: unless-stopped
+
+  # Optional PostgreSQL backend. Not started by default — only runs with
+  # `docker compose --profile postgres up`. When you do, also set
+  # CHRONOS_DB_DRIVER=postgres (the CHRONOS_DB_DSN default above already
+  # points at this service).
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: chronosmonitor
+      POSTGRES_PASSWORD: chronos
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  chronos-data:
+  postgres-data:
