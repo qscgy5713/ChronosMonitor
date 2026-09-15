@@ -32,7 +32,8 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
 
 CREATE TABLE IF NOT EXISTS task_schedules (
 	task_name                  TEXT PRIMARY KEY,
-	expected_interval_seconds  INTEGER NOT NULL,
+	expected_interval_seconds  INTEGER,
+	cron_expression            TEXT,
 	grace_period_seconds       INTEGER NOT NULL DEFAULT 0,
 	last_seen_at               DATETIME,
 	status                     TEXT NOT NULL DEFAULT 'ok',
@@ -58,7 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
 
 CREATE TABLE IF NOT EXISTS task_schedules (
 	task_name                  TEXT PRIMARY KEY,
-	expected_interval_seconds  BIGINT NOT NULL,
+	expected_interval_seconds  BIGINT,
+	cron_expression            TEXT,
 	grace_period_seconds       BIGINT NOT NULL DEFAULT 0,
 	last_seen_at               TIMESTAMPTZ,
 	status                     TEXT NOT NULL DEFAULT 'ok',

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/robfig/cron/v3"
 
 	"chronosmonitor/internal/models"
 	"chronosmonitor/internal/store"
@@ -19,23 +20,38 @@ func NewScheduleHandler(s *store.ScheduleStore) *ScheduleHandler {
 }
 
 // Register creates or updates a schedule expectation: "task_name should
-// start at least once every expected_interval_seconds (+ grace_period_seconds)".
+// start at least once every expected_interval_seconds", or on the cadence
+// described by cron_expression — exactly one of the two is required, plus
+// an optional grace_period_seconds buffer.
 func (h *ScheduleHandler) Register(c *gin.Context) {
 	var req models.RegisterScheduleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.ExpectedIntervalSeconds <= 0 {
+
+	hasInterval := req.ExpectedIntervalSeconds != nil
+	hasCron := req.CronExpression != nil && *req.CronExpression != ""
+
+	switch {
+	case hasInterval == hasCron:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exactly one of expected_interval_seconds or cron_expression is required"})
+		return
+	case hasInterval && *req.ExpectedIntervalSeconds <= 0:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "expected_interval_seconds must be positive"})
 		return
+	case hasCron:
+		if _, err := cron.ParseStandard(*req.CronExpression); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid cron_expression: " + err.Error()})
+			return
+		}
 	}
 	if req.GracePeriodSeconds < 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "grace_period_seconds must not be negative"})
 		return
 	}
 
-	if err := h.store.Upsert(req.TaskName, req.ExpectedIntervalSeconds, req.GracePeriodSeconds, time.Now().UTC()); err != nil {
+	if err := h.store.Upsert(req.TaskName, req.ExpectedIntervalSeconds, req.CronExpression, req.GracePeriodSeconds, time.Now().UTC()); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to register schedule"})
 		return
 	}

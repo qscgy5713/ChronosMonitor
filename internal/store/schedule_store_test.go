@@ -17,7 +17,7 @@ func TestUpsertCreatesNewSchedule(t *testing.T) {
 	s := newTestScheduleStore(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	if err := s.Upsert("daily-report", 86400, 300, now); err != nil {
+	if err := s.Upsert("daily-report", int64ptr(86400), nil, 300, now); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
 
@@ -25,8 +25,11 @@ func TestUpsertCreatesNewSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if got.ExpectedIntervalSeconds != 86400 || got.GracePeriodSeconds != 300 {
+	if got.ExpectedIntervalSeconds == nil || *got.ExpectedIntervalSeconds != 86400 || got.GracePeriodSeconds != 300 {
 		t.Errorf("got = %+v, want interval=86400 grace=300", got)
+	}
+	if got.CronExpression != nil {
+		t.Errorf("CronExpression = %v, want nil for an interval-mode schedule", got.CronExpression)
 	}
 	if got.Status != models.ScheduleStatusOK {
 		t.Errorf("Status = %q, want ok for a freshly registered schedule", got.Status)
@@ -40,7 +43,7 @@ func TestUpsertUpdatingExistingScheduleDoesNotResetLastSeenOrStatus(t *testing.T
 	s := newTestScheduleStore(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	if err := s.Upsert("daily-report", 86400, 0, now); err != nil {
+	if err := s.Upsert("daily-report", int64ptr(86400), nil, 0, now); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
 	touchedAt := now.Add(time.Minute)
@@ -49,7 +52,7 @@ func TestUpsertUpdatingExistingScheduleDoesNotResetLastSeenOrStatus(t *testing.T
 	}
 
 	// Re-register with a different interval, as if the operator changed it.
-	if err := s.Upsert("daily-report", 43200, 600, now.Add(2*time.Minute)); err != nil {
+	if err := s.Upsert("daily-report", int64ptr(43200), nil, 600, now.Add(2*time.Minute)); err != nil {
 		t.Fatalf("second Upsert() error = %v", err)
 	}
 
@@ -57,7 +60,7 @@ func TestUpsertUpdatingExistingScheduleDoesNotResetLastSeenOrStatus(t *testing.T
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if got.ExpectedIntervalSeconds != 43200 || got.GracePeriodSeconds != 600 {
+	if got.ExpectedIntervalSeconds == nil || *got.ExpectedIntervalSeconds != 43200 || got.GracePeriodSeconds != 600 {
 		t.Errorf("got = %+v, want the updated interval=43200 grace=600", got)
 	}
 	if got.LastSeenAt == nil || !got.LastSeenAt.Equal(touchedAt) {
@@ -69,7 +72,7 @@ func TestTouchUpdatesLastSeenAndResetsStatusToOK(t *testing.T) {
 	s := newTestScheduleStore(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	if err := s.Upsert("daily-report", 60, 0, now); err != nil {
+	if err := s.Upsert("daily-report", int64ptr(60), nil, 0, now); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
 	// Simulate a missed episode.
@@ -117,10 +120,10 @@ func TestListReturnsSchedulesOrderedByTaskName(t *testing.T) {
 	s := newTestScheduleStore(t)
 	now := time.Now().UTC()
 
-	if err := s.Upsert("zebra-job", 60, 0, now); err != nil {
+	if err := s.Upsert("zebra-job", int64ptr(60), nil, 0, now); err != nil {
 		t.Fatalf("Upsert(zebra-job) error = %v", err)
 	}
-	if err := s.Upsert("alpha-job", 60, 0, now); err != nil {
+	if err := s.Upsert("alpha-job", int64ptr(60), nil, 0, now); err != nil {
 		t.Fatalf("Upsert(alpha-job) error = %v", err)
 	}
 
@@ -136,7 +139,7 @@ func TestListReturnsSchedulesOrderedByTaskName(t *testing.T) {
 func TestDeleteRemovesSchedule(t *testing.T) {
 	s := newTestScheduleStore(t)
 
-	if err := s.Upsert("daily-report", 60, 0, time.Now()); err != nil {
+	if err := s.Upsert("daily-report", int64ptr(60), nil, 0, time.Now()); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
 	if err := s.Delete("daily-report"); err != nil {
@@ -160,12 +163,12 @@ func TestDetectMissedFlagsOverdueSchedules(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Registered long ago, never touched: overdue relative to registration time.
-	if err := s.Upsert("never-seen", 60, 0, now.Add(-time.Hour)); err != nil {
+	if err := s.Upsert("never-seen", int64ptr(60), nil, 0, now.Add(-time.Hour)); err != nil {
 		t.Fatalf("Upsert(never-seen) error = %v", err)
 	}
 
 	// Touched recently: within its window, not overdue.
-	if err := s.Upsert("healthy", 60, 0, now.Add(-time.Hour)); err != nil {
+	if err := s.Upsert("healthy", int64ptr(60), nil, 0, now.Add(-time.Hour)); err != nil {
 		t.Fatalf("Upsert(healthy) error = %v", err)
 	}
 	if err := s.Touch("healthy", now.Add(-10*time.Second)); err != nil {
@@ -173,7 +176,7 @@ func TestDetectMissedFlagsOverdueSchedules(t *testing.T) {
 	}
 
 	// Touched a while ago, but still within interval + grace.
-	if err := s.Upsert("within-grace", 60, 30, now.Add(-time.Hour)); err != nil {
+	if err := s.Upsert("within-grace", int64ptr(60), nil, 30, now.Add(-time.Hour)); err != nil {
 		t.Fatalf("Upsert(within-grace) error = %v", err)
 	}
 	if err := s.Touch("within-grace", now.Add(-80*time.Second)); err != nil { // 80s < 60+30
@@ -181,7 +184,7 @@ func TestDetectMissedFlagsOverdueSchedules(t *testing.T) {
 	}
 
 	// Touched just past interval + grace: overdue.
-	if err := s.Upsert("past-grace", 60, 30, now.Add(-time.Hour)); err != nil {
+	if err := s.Upsert("past-grace", int64ptr(60), nil, 30, now.Add(-time.Hour)); err != nil {
 		t.Fatalf("Upsert(past-grace) error = %v", err)
 	}
 	if err := s.Touch("past-grace", now.Add(-100*time.Second)); err != nil { // 100s > 60+30
@@ -224,7 +227,7 @@ func TestDetectMissedDoesNotReflagAlreadyMissedSchedules(t *testing.T) {
 	s := newTestScheduleStore(t)
 	now := time.Now().UTC()
 
-	if err := s.Upsert("never-seen", 60, 0, now.Add(-time.Hour)); err != nil {
+	if err := s.Upsert("never-seen", int64ptr(60), nil, 0, now.Add(-time.Hour)); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
 
@@ -242,5 +245,99 @@ func TestDetectMissedDoesNotReflagAlreadyMissedSchedules(t *testing.T) {
 	}
 	if len(second) != 0 {
 		t.Errorf("second DetectMissed() = %+v, want no-op on an already-missed schedule", second)
+	}
+}
+
+func strptr(s string) *string { return &s }
+
+func TestUpsertCreatesCronSchedule(t *testing.T) {
+	s := newTestScheduleStore(t)
+	now := time.Now().UTC()
+
+	if err := s.Upsert("weekday-report", nil, strptr("0 9 * * 1-5"), 0, now); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	got, err := s.Get("weekday-report")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.CronExpression == nil || *got.CronExpression != "0 9 * * 1-5" {
+		t.Errorf("CronExpression = %v, want \"0 9 * * 1-5\"", got.CronExpression)
+	}
+	if got.ExpectedIntervalSeconds != nil {
+		t.Errorf("ExpectedIntervalSeconds = %v, want nil for a cron-mode schedule", got.ExpectedIntervalSeconds)
+	}
+}
+
+func TestUpsertSwitchingFromIntervalToCronMode(t *testing.T) {
+	s := newTestScheduleStore(t)
+	now := time.Now().UTC()
+
+	if err := s.Upsert("some-job", int64ptr(60), nil, 0, now); err != nil {
+		t.Fatalf("first Upsert() error = %v", err)
+	}
+	if err := s.Upsert("some-job", nil, strptr("*/5 * * * *"), 0, now.Add(time.Minute)); err != nil {
+		t.Fatalf("second Upsert() error = %v", err)
+	}
+
+	got, err := s.Get("some-job")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.ExpectedIntervalSeconds != nil {
+		t.Errorf("ExpectedIntervalSeconds = %v, want nil after switching to cron mode", got.ExpectedIntervalSeconds)
+	}
+	if got.CronExpression == nil || *got.CronExpression != "*/5 * * * *" {
+		t.Errorf("CronExpression = %v, want \"*/5 * * * *\"", got.CronExpression)
+	}
+}
+
+func TestDetectMissedCronMode_FlagsOverdue(t *testing.T) {
+	s := newTestScheduleStore(t)
+	now := time.Now().UTC()
+
+	// "every minute", registered an hour ago and never seen: badly overdue.
+	if err := s.Upsert("frequent-job", nil, strptr("* * * * *"), 0, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	missed, err := s.DetectMissed(now)
+	if err != nil {
+		t.Fatalf("DetectMissed() error = %v", err)
+	}
+	if len(missed) != 1 || missed[0].TaskName != "frequent-job" {
+		t.Fatalf("DetectMissed() = %+v, want [frequent-job]", missed)
+	}
+}
+
+// This is the whole point of cron mode over simple interval mode: a
+// weekdays-only schedule has a ~72h gap between Friday and Monday that a
+// fixed "every 24h" interval would wrongly flag as missed.
+func TestDetectMissedCronMode_HandlesWeekdayOnlySchedule(t *testing.T) {
+	s := newTestScheduleStore(t)
+
+	friday9am := time.Date(2024, 1, 5, 9, 0, 1, 0, time.UTC)        // just after Friday's run
+	mondayBefore9am := time.Date(2024, 1, 8, 8, 59, 0, 0, time.UTC) // just before Monday's run is due
+	mondayAfter9am := time.Date(2024, 1, 8, 9, 0, 1, 0, time.UTC)   // just after it was due
+
+	if err := s.Upsert("weekday-report", nil, strptr("0 9 * * 1-5"), 0, friday9am); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	missed, err := s.DetectMissed(mondayBefore9am)
+	if err != nil {
+		t.Fatalf("DetectMissed(mondayBefore9am) error = %v", err)
+	}
+	if len(missed) != 0 {
+		t.Errorf("DetectMissed(mondayBefore9am) = %+v, want none — the ~72h Fri->Mon gap is expected, not a miss", missed)
+	}
+
+	missed, err = s.DetectMissed(mondayAfter9am)
+	if err != nil {
+		t.Fatalf("DetectMissed(mondayAfter9am) error = %v", err)
+	}
+	if len(missed) != 1 || missed[0].TaskName != "weekday-report" {
+		t.Fatalf("DetectMissed(mondayAfter9am) = %+v, want [weekday-report] once Monday's run is actually overdue", missed)
 	}
 }

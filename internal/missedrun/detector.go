@@ -67,12 +67,23 @@ func toAlertTask(sched models.Schedule) models.TaskRun {
 	if sched.LastSeenAt != nil {
 		lastSeen = sched.LastSeenAt.Format(time.RFC3339)
 	}
+
+	var expectation string
+	switch {
+	case sched.CronExpression != nil:
+		expectation = fmt.Sprintf("cron `%s`", *sched.CronExpression)
+	case sched.ExpectedIntervalSeconds != nil:
+		expectation = fmt.Sprintf("every %ds", *sched.ExpectedIntervalSeconds)
+	default:
+		expectation = "an unknown schedule" // shouldn't happen; registration requires one or the other
+	}
+
 	return models.TaskRun{
 		TaskName: sched.TaskName,
 		Status:   models.StatusMissed,
 		ErrorMessage: fmt.Sprintf(
-			"expected at least once every %ds (+%ds grace); last seen: %s",
-			sched.ExpectedIntervalSeconds, sched.GracePeriodSeconds, lastSeen,
+			"expected %s (+%ds grace); last seen: %s",
+			expectation, sched.GracePeriodSeconds, lastSeen,
 		),
 	}
 }

@@ -179,9 +179,11 @@ CHRONOS_BASE_URL=http://your-host:8080 go run ./cmd/demo-worker
 
 ## Missed Run 偵測（Dead Man's Switch）
 
-TTL 逾期偵測只能抓「任務已經 `start` 但卡住不放」；如果一個 cron 該跑的時候完全沒跑（程式沒被觸發、被排程系統漏掉、主機掛了...），TTL 機制完全不會知道，因為根本沒有一筆 run 存在。Missed run 偵測補上這一塊：額外註冊一個「這個 `task_name` 應該至少每 N 秒回報一次」的期望，背景服務會定期檢查有沒有超過期限沒收到 `start`。
+TTL 逾期偵測只能抓「任務已經 `start` 但卡住不放」；如果一個 cron 該跑的時候完全沒跑（程式沒被觸發、被排程系統漏掉、主機掛了...），TTL 機制完全不會知道，因為根本沒有一筆 run 存在。Missed run 偵測補上這一塊：額外註冊一個「這個 `task_name` 應該多久跑一次」的期望，背景服務會定期檢查有沒有超過期限沒收到 `start`。
 
-註冊排程：
+支援兩種模式，註冊時**擇一**：
+
+**簡單間隔模式**——適合「大概每 N 秒跑一次」這種粗略排程：
 
 ```bash
 curl -X POST localhost:8080/api/v1/schedules \
@@ -193,7 +195,23 @@ curl -X POST localhost:8080/api/v1/schedules \
   }'
 ```
 
-意思是「`daily-report` 應該至少每 86400 秒（24 小時）回報一次 `start`，超過再加 1800 秒（30 分鐘緩衝）都沒收到才算 missed」。之後只要這個 `task_name` 正常呼叫 `POST /api/v1/events/start`，排程就會自動被「摸」一下（reset 計時、狀態轉回 `ok`）——不需要額外呼叫任何 API，跟平常回報流程完全一樣。
+**Cron expression 模式**——適合非均勻排程（只在平日跑、每月固定幾號跑...），標準 5 欄位語法（`分 時 日 月 星期`）：
+
+```bash
+curl -X POST localhost:8080/api/v1/schedules \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "task_name": "weekday-report",
+    "cron_expression": "0 9 * * 1-5",
+    "grace_period_seconds": 600
+  }'
+```
+
+兩者的差別不只是語法——間隔模式沒辦法正確表達「只在平日跑」：如果用「每 24 小時」去逼近「平日 9 點跑」，系統會把週五跑完到週一該跑之間那 ~72 小時的正常空檔誤判成 missed。Cron 模式會正確算出「下一次該執行的時間」，不會有這個問題。沒有特別需求的話，簡單間隔模式已經夠用；只有排程本身就不均勻時才需要 cron 模式。
+
+`grace_period_seconds` 兩種模式都適用，是「超過預期時間之後，再給多久緩衝才真的算 missed」。
+
+之後只要這個 `task_name` 正常呼叫 `POST /api/v1/events/start`，排程就會自動被「摸」一下（reset 計時、狀態轉回 `ok`）——不需要額外呼叫任何 API，跟平常回報流程完全一樣。
 
 一旦超過期限沒收到，狀態會轉成 `missed` 並觸發一次告警（跟 `failed`/`timeout` 走同一條 webhook 管線）；之後在下次真的收到 `start`之前，不會重複告警轟炸。
 
@@ -364,11 +382,14 @@ SSE endpoint，前端用 `new EventSource('/api/v1/stream')` 訂閱。事件類�
 
 ### `POST /api/v1/schedules`
 
-註冊或更新一個 missed-run 排程期望。`task_name` 沒有對應的真實任務也可以先註冊（例如任務還沒部署，先設好告警）。
+註冊或更新一個 missed-run 排程期望。`task_name` 沒有對應的真實任務也可以先註冊（例如任務還沒部署，先設好告警）。`expected_interval_seconds` 與 `cron_expression` 必須**擇一**提供。
 
 ```json
-// request
+// request（簡單間隔模式）
 { "task_name": "daily-report", "expected_interval_seconds": 86400, "grace_period_seconds": 1800 }
+
+// request（cron 模式，標準 5 欄位語法）
+{ "task_name": "weekday-report", "cron_expression": "0 9 * * 1-5", "grace_period_seconds": 600 }
 
 // response 204 No Content
 ```

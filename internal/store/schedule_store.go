@@ -3,7 +3,10 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"log"
 	"time"
+
+	"github.com/robfig/cron/v3"
 
 	"chronosmonitor/internal/db"
 	"chronosmonitor/internal/models"
@@ -17,19 +20,24 @@ func NewScheduleStore(conn *db.Conn) *ScheduleStore {
 	return &ScheduleStore{db: conn}
 }
 
-// Upsert registers a task_name's schedule expectation, or updates the
-// interval/grace period of an existing one. It never resets last_seen_at or
-// status — re-registering a schedule doesn't erase what's already known
-// about whether the task has been showing up.
-func (s *ScheduleStore) Upsert(taskName string, expectedIntervalSeconds, gracePeriodSeconds int64, now time.Time) error {
+// Upsert registers a task_name's schedule expectation, or updates an
+// existing one's expectation/grace period. Exactly one of
+// expectedIntervalSeconds or cronExpression should be non-nil; callers
+// (the HTTP handler) are responsible for validating that and for validating
+// a cron expression parses, so this layer doesn't have to reject bad input.
+// It never resets last_seen_at or status — re-registering a schedule
+// doesn't erase what's already known about whether the task has been
+// showing up.
+func (s *ScheduleStore) Upsert(taskName string, expectedIntervalSeconds *int64, cronExpression *string, gracePeriodSeconds int64, now time.Time) error {
 	_, err := s.db.Exec(
-		`INSERT INTO task_schedules (task_name, expected_interval_seconds, grace_period_seconds, status, updated_at)
-		 VALUES (?, ?, ?, ?, ?)
+		`INSERT INTO task_schedules (task_name, expected_interval_seconds, cron_expression, grace_period_seconds, status, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(task_name) DO UPDATE SET
 		   expected_interval_seconds = excluded.expected_interval_seconds,
+		   cron_expression = excluded.cron_expression,
 		   grace_period_seconds = excluded.grace_period_seconds,
 		   updated_at = excluded.updated_at`,
-		taskName, expectedIntervalSeconds, gracePeriodSeconds, models.ScheduleStatusOK, now,
+		taskName, expectedIntervalSeconds, cronExpression, gracePeriodSeconds, models.ScheduleStatusOK, now,
 	)
 	return err
 }
@@ -47,7 +55,7 @@ func (s *ScheduleStore) Touch(taskName string, at time.Time) error {
 
 func (s *ScheduleStore) Get(taskName string) (*models.Schedule, error) {
 	row := s.db.QueryRow(
-		`SELECT task_name, expected_interval_seconds, grace_period_seconds, last_seen_at, status, updated_at
+		`SELECT task_name, expected_interval_seconds, cron_expression, grace_period_seconds, last_seen_at, status, updated_at
 		 FROM task_schedules WHERE task_name = ?`,
 		taskName,
 	)
@@ -56,7 +64,7 @@ func (s *ScheduleStore) Get(taskName string) (*models.Schedule, error) {
 
 func (s *ScheduleStore) List() ([]models.Schedule, error) {
 	rows, err := s.db.Query(
-		`SELECT task_name, expected_interval_seconds, grace_period_seconds, last_seen_at, status, updated_at
+		`SELECT task_name, expected_interval_seconds, cron_expression, grace_period_seconds, last_seen_at, status, updated_at
 		 FROM task_schedules ORDER BY task_name`,
 	)
 	if err != nil {
@@ -80,12 +88,15 @@ func (s *ScheduleStore) Delete(taskName string) error {
 	return checkRowsAffected(res, err)
 }
 
-// DetectMissed finds schedules currently "ok" whose last-seen time (or
-// registration time, if never seen at all) is older than their configured
-// expected_interval_seconds + grace_period_seconds, and flips them to
-// "missed". Only newly-flagged schedules are returned — one already at
-// "missed" isn't returned again on a later call, so callers don't have to
+// DetectMissed finds schedules currently "ok" that are overdue, and flips
+// them to "missed". Only newly-flagged schedules are returned — one already
+// at "missed" isn't returned again on a later call, so callers don't have to
 // de-duplicate repeat alerts for the same missed episode themselves.
+//
+// "Overdue" is computed from each schedule's last-seen time (or registration
+// time, if never seen at all):
+//   - interval mode: reference + expected_interval_seconds + grace_period_seconds
+//   - cron mode: the next cron occurrence after reference, + grace_period_seconds
 //
 // The comparison is done in Go rather than via SQL date functions for the
 // same reason as TaskStore.SweepTimeouts: the sqlite driver round-trips
@@ -93,7 +104,7 @@ func (s *ScheduleStore) Delete(taskName string) error {
 // julianday()/datetime() can't parse.
 func (s *ScheduleStore) DetectMissed(now time.Time) ([]models.Schedule, error) {
 	rows, err := s.db.Query(
-		`SELECT task_name, expected_interval_seconds, grace_period_seconds, last_seen_at, updated_at
+		`SELECT task_name, expected_interval_seconds, cron_expression, grace_period_seconds, last_seen_at, updated_at
 		 FROM task_schedules WHERE status = ?`,
 		models.ScheduleStatusOK,
 	)
@@ -102,29 +113,43 @@ func (s *ScheduleStore) DetectMissed(now time.Time) ([]models.Schedule, error) {
 	}
 
 	type candidate struct {
-		taskName  string
-		reference time.Time
-		deadline  time.Duration
+		taskName string
+		deadline time.Time
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var taskName string
-		var intervalSeconds, graceSeconds int64
+		var intervalSeconds sql.NullInt64
+		var cronExpr sql.NullString
+		var graceSeconds int64
 		var lastSeenAt sql.NullTime
 		var updatedAt time.Time
-		if err := rows.Scan(&taskName, &intervalSeconds, &graceSeconds, &lastSeenAt, &updatedAt); err != nil {
+		if err := rows.Scan(&taskName, &intervalSeconds, &cronExpr, &graceSeconds, &lastSeenAt, &updatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
+
 		reference := updatedAt // registered but never seen: count from registration time
 		if lastSeenAt.Valid {
 			reference = lastSeenAt.Time
 		}
-		candidates = append(candidates, candidate{
-			taskName:  taskName,
-			reference: reference,
-			deadline:  time.Duration(intervalSeconds+graceSeconds) * time.Second,
-		})
+		grace := time.Duration(graceSeconds) * time.Second
+
+		var deadline time.Time
+		if cronExpr.Valid {
+			sched, err := cron.ParseStandard(cronExpr.String)
+			if err != nil {
+				// Was validated at registration time, so this shouldn't
+				// happen — but don't let one bad row break the whole sweep.
+				log.Printf("missed-run: skipping %q, invalid stored cron_expression %q: %v", taskName, cronExpr.String, err)
+				continue
+			}
+			deadline = sched.Next(reference).Add(grace)
+		} else {
+			deadline = reference.Add(time.Duration(intervalSeconds.Int64)*time.Second + grace)
+		}
+
+		candidates = append(candidates, candidate{taskName: taskName, deadline: deadline})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -134,7 +159,7 @@ func (s *ScheduleStore) DetectMissed(now time.Time) ([]models.Schedule, error) {
 
 	var missed []models.Schedule
 	for _, c := range candidates {
-		if now.Sub(c.reference) <= c.deadline {
+		if now.Before(c.deadline) {
 			continue
 		}
 		res, err := s.db.Exec(
@@ -158,9 +183,11 @@ func (s *ScheduleStore) DetectMissed(now time.Time) ([]models.Schedule, error) {
 
 func scanSchedule(row scanner) (*models.Schedule, error) {
 	var sched models.Schedule
+	var intervalSeconds sql.NullInt64
+	var cronExpr sql.NullString
 	var lastSeenAt sql.NullTime
 
-	err := row.Scan(&sched.TaskName, &sched.ExpectedIntervalSeconds, &sched.GracePeriodSeconds,
+	err := row.Scan(&sched.TaskName, &intervalSeconds, &cronExpr, &sched.GracePeriodSeconds,
 		&lastSeenAt, &sched.Status, &sched.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -169,6 +196,12 @@ func scanSchedule(row scanner) (*models.Schedule, error) {
 		return nil, err
 	}
 
+	if intervalSeconds.Valid {
+		sched.ExpectedIntervalSeconds = &intervalSeconds.Int64
+	}
+	if cronExpr.Valid {
+		sched.CronExpression = &cronExpr.String
+	}
 	if lastSeenAt.Valid {
 		sched.LastSeenAt = &lastSeenAt.Time
 	}

@@ -252,7 +252,7 @@ func TestList_FiltersByStatus(t *testing.T) {
 func TestStart_TouchesRegisteredScheduleAndClearsMissedStatus(t *testing.T) {
 	r, _, scheduleStore := newTestSetup(t)
 
-	if err := scheduleStore.Upsert("daily-report", 60, 0, time.Now().UTC()); err != nil {
+	if err := scheduleStore.Upsert("daily-report", int64ptr(60), nil, 0, time.Now().UTC()); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
 	// Simulate it having already been flagged missed before this run showed up.
