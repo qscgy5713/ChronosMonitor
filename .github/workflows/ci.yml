@@ -17,6 +17,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # internal/webui/dist is git-ignored except for a placeholder
+      # .gitkeep, and internal/webui/webui.go embeds it via `//go:embed
+      # all:dist` — without a real frontend build here first, `go build`
+      # and `go test` both happily succeed against that empty placeholder,
+      # so a broken embedded-UI integration (or a Vite output change that
+      # breaks it) would never fail CI. Mirrors `make build`'s own
+      # build-frontend step so this job proves what a real release build
+      # actually produces.
+      - name: Build frontend (embedded into the Go binary)
+        run: make build-frontend
+
       - name: Check formatting (gofmt)
         run: |
           unformatted=$(gofmt -l .)
